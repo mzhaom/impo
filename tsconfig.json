@@ -13,6 +13,7 @@
     "app.config.js",
     "sources/app/**/*.ts",
     "sources/app/**/*.tsx",
+    "sources/**/*.d.ts",
     "sources/tmux-mobile/**/*.ts",
     "sources/tmux-mobile/**/*.tsx",
     "sources/theme.ts"

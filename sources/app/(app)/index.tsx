@@ -1313,7 +1313,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
   },
   menuBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0, 0, 0, 0.08)",
   },
   menuPanel: {
