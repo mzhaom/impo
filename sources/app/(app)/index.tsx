@@ -21,6 +21,7 @@ import {
   useColorScheme,
   useWindowDimensions,
 } from "react-native";
+import type { StyleProp, TextStyle } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
@@ -29,7 +30,8 @@ import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-spe
 import { StatusBar } from "expo-status-bar";
 import { KeyboardAvoidingView, KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Markdown from "react-native-markdown-display";
+import Markdown, { type RenderRules } from "react-native-markdown-display";
+import { toByteArray } from "base64-js";
 import { darkTheme, lightTheme } from "@/theme";
 import type { AppTheme } from "@/theme";
 import {
@@ -69,6 +71,7 @@ import {
   useCommandCenter,
   useDeletePin,
   useDeleteWindow,
+  usePinFileArtifact,
   usePinInlineArtifact,
   usePins,
   useRenameWindow,
@@ -90,7 +93,14 @@ import {
   machineKey,
   machineLabel,
 } from "@/tmux-mobile/types";
+import {
+  filePathFromLocalHref,
+  fileViewerEndpoint,
+  resolveLinkedFilePath,
+  splitFilePathText,
+} from "@/tmux-mobile/file-links";
 import type {
+  AgentFileResponse,
   AgentSession,
   AgentTranscriptResponse,
   ArtifactPin,
@@ -152,7 +162,11 @@ const PROMPT_SHORTCUTS = [
   { label: "Slash", text: "/" },
 ] as const;
 
-const TERMINAL_KEYS = [
+type TerminalKeyEntry =
+  | { label: string; key: string; danger?: boolean }
+  | { label: string; command: string; danger?: boolean };
+
+const TERMINAL_KEYS: readonly TerminalKeyEntry[] = [
   { label: "Esc", key: "Escape" },
   { label: "^C", key: "C-c", danger: true },
   { label: "^Z", key: "C-z", danger: true },
@@ -164,10 +178,80 @@ const TERMINAL_KEYS = [
   { label: "↓", key: "Down" },
 ] as const;
 
-type TerminalKeyEntry = (typeof TERMINAL_KEYS)[number];
+const TERMINAL_INPUT_KEYS: readonly TerminalKeyEntry[] = [
+  { label: "Enter", key: "Enter" },
+  { label: "Tab", key: "Tab" },
+  { label: "Esc", key: "Escape" },
+  { label: "↑", key: "Up" },
+  { label: "↓", key: "Down" },
+  { label: "←", key: "Left" },
+  { label: "→", key: "Right" },
+  { label: "⌫", key: "BSpace" },
+  { label: "⌫line", key: "C-u" },
+  { label: "^C", key: "C-c", danger: true },
+  { label: "^D", key: "C-d", danger: true },
+  { label: "^Z", key: "C-z", danger: true },
+  { label: "fg", command: "fg" },
+] as const;
+const TERMINAL_INITIAL_LINES = 260;
+const TERMINAL_REFRESH_LINES = 320;
+const TERMINAL_ACTIVE_REFRESH_MS = 700;
+const TERMINAL_IDLE_REFRESH_MS = 1400;
+
+function terminalKeyFromNativeKey(rawKey: string): string {
+  switch (rawKey) {
+    case "ArrowUp":
+    case "Up":
+      return "Up";
+    case "ArrowDown":
+    case "Down":
+      return "Down";
+    case "ArrowLeft":
+    case "Left":
+      return "Left";
+    case "ArrowRight":
+    case "Right":
+      return "Right";
+    case "Enter":
+    case "Return":
+    case "\n":
+    case "\r":
+      return "Enter";
+    case "Backspace":
+    case "Delete":
+    case "\b":
+    case "\u007f":
+      return "BSpace";
+    case "Tab":
+    case "\t":
+      return "Tab";
+    case "Escape":
+    case "Esc":
+    case "\u001b":
+      return "Escape";
+    case "\u0003":
+      return "C-c";
+    case "\u0004":
+      return "C-d";
+    case "\u001a":
+      return "C-z";
+    default:
+      return "";
+  }
+}
+
 type SendRetryAction =
   | { kind: "text"; label: string }
   | { kind: "terminal"; label: string; entry: TerminalKeyEntry };
+
+type AgentFileTarget = {
+  agent: AgentSession;
+  path: string;
+};
+type MarkdownPathRuleOptions = {
+  agent?: AgentSession | null;
+  basePath?: string;
+};
 
 const SHEET_DRAG_ZONE_HEIGHT = 92;
 
@@ -262,6 +346,91 @@ function artifactSlugPart(value: string | null | undefined, fallback = "response
   return slug || fallback;
 }
 
+function decodeBase64Utf8(base64: string): string {
+  const bytes = toByteArray(String(base64 || ""));
+  if (typeof TextDecoder !== "undefined") {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  try {
+    return decodeURIComponent(escape(binary));
+  } catch {
+    return binary;
+  }
+}
+
+function agentFileBrowserUrl(
+  api: { url: (pathname: string) => URL },
+  agent: AgentSession,
+  filePath: string,
+): string {
+  const params = new URLSearchParams({
+    paneId: agent.paneId || "",
+    path: filePath,
+  });
+  const machineId = agentMachineKey(agent);
+  if (machineId) params.set("machineId", machineId);
+  if (agent.mux) params.set("mux", agent.mux);
+  return api.url(`${fileViewerEndpoint(filePath)}?${params.toString()}`).toString();
+}
+
+function createMarkdownPathRules(
+  onOpenPath: (path: string) => void,
+  options: MarkdownPathRuleOptions = {},
+): RenderRules {
+  return {
+    text: (node, _children, parentNodes, styles, inheritedStyles = {}) => {
+      const content = String(node.content || "");
+      const insideLink = parentNodes.some((parent) => parent?.type === "link" || parent?.type === "blocklink");
+      const parts = insideLink ? [{ kind: "text" as const, text: content }] : splitFilePathText(content);
+      const hasFile = parts.some((part) => part.kind === "file");
+      if (!hasFile) {
+        return (
+          <Text key={node.key} style={[inheritedStyles, styles.text]}>
+            {content}
+          </Text>
+        );
+      }
+      return (
+        <Text key={node.key} style={[inheritedStyles, styles.text]}>
+          {parts.map((part, index) =>
+            part.kind === "file" ? (
+              <Text
+                key={`${node.key}-file-${index}`}
+                accessibilityRole="link"
+                style={styles.filePathLink || styles.link}
+                onPress={() => onOpenPath(resolveLinkedFilePath(part.path, options.basePath))}
+              >
+                {part.text}
+              </Text>
+            ) : (
+              <Text key={`${node.key}-text-${index}`}>{part.text}</Text>
+            ),
+          )}
+        </Text>
+      );
+    },
+    image: (node) => {
+      const src = String(node.attributes?.src || "");
+      const alt = String(node.attributes?.alt || "");
+      const filePath = filePathFromLocalHref(src, options.basePath);
+      return (
+        <MarkdownImageBlock
+          key={node.key}
+          src={src}
+          alt={alt}
+          agent={options.agent || null}
+          filePath={filePath}
+          onOpenPath={onOpenPath}
+        />
+      );
+    },
+  };
+}
+
 function compareRecentActivity(a: AgentSession, b: AgentSession): number {
   return activityTime(b) - activityTime(a);
 }
@@ -288,6 +457,7 @@ function CommandCenterScreen() {
   const [renameTarget, setRenameTarget] = React.useState<AgentSession | null>(null);
   const [viewTarget, setViewTarget] = React.useState<AgentSession | null>(null);
   const [responseTarget, setResponseTarget] = React.useState<AgentSession | null>(null);
+  const [fileTarget, setFileTarget] = React.useState<AgentFileTarget | null>(null);
   const [transcriptTarget, setTranscriptTarget] = React.useState<AgentSession | null>(null);
   const [startVisible, setStartVisible] = React.useState(false);
   const [menuVisible, setMenuVisible] = React.useState(false);
@@ -363,6 +533,12 @@ function CommandCenterScreen() {
   const openPinnedArtifacts = React.useCallback(() => {
     setMenuVisible(false);
     setPinsVisible(true);
+    void Haptics.selectionAsync();
+  }, []);
+
+  const openAgentFile = React.useCallback((agent: AgentSession, path: string) => {
+    setSelectedAgent(agent);
+    setFileTarget({ agent, path });
     void Haptics.selectionAsync();
   }, []);
 
@@ -562,6 +738,7 @@ function CommandCenterScreen() {
                 selectAgent();
                 copyAssistantResponse(item).catch(() => {});
               }}
+              onOpenFile={(path) => openAgentFile(item, path)}
               responseCopied={copiedResponseKey === key}
               onTranscript={() => {
                 selectAgent();
@@ -582,9 +759,21 @@ function CommandCenterScreen() {
         onCopy={(agent) => {
           copyAssistantResponse(agent).catch(() => {});
         }}
+        onOpenFile={openAgentFile}
         onClose={() => setResponseTarget(null)}
       />
-      <TranscriptModal target={transcriptTarget} onClose={() => setTranscriptTarget(null)} />
+      <FilePreviewModal
+        target={fileTarget}
+        onOpenPath={(path) => {
+          if (fileTarget) setFileTarget({ agent: fileTarget.agent, path });
+        }}
+        onClose={() => setFileTarget(null)}
+      />
+      <TranscriptModal
+        target={transcriptTarget}
+        onOpenFile={openAgentFile}
+        onClose={() => setTranscriptTarget(null)}
+      />
       <PinnedArtifactsModal visible={pinsVisible} onClose={() => setPinsVisible(false)} />
       <CommandMenu
         visible={menuVisible}
@@ -731,6 +920,270 @@ function Chip({
   );
 }
 
+function LinkedPathText({
+  text,
+  style,
+  numberOfLines,
+  onOpenPath,
+}: {
+  text: string;
+  style?: StyleProp<TextStyle>;
+  numberOfLines?: number;
+  onOpenPath: (path: string) => void;
+}) {
+  const styles = useAppStyles();
+  const parts = React.useMemo(() => splitFilePathText(text), [text]);
+  const hasFile = parts.some((part) => part.kind === "file");
+  if (!hasFile) {
+    return (
+      <Text style={style} numberOfLines={numberOfLines}>
+        {text}
+      </Text>
+    );
+  }
+  return (
+    <Text style={style} numberOfLines={numberOfLines}>
+      {parts.map((part, index) =>
+        part.kind === "file" ? (
+          <Text
+            key={`file-${index}`}
+            accessibilityRole="link"
+            style={styles.inlineFileLink}
+            onPress={() => onOpenPath(part.path)}
+          >
+            {part.text}
+          </Text>
+        ) : (
+          <Text key={`text-${index}`}>{part.text}</Text>
+        ),
+      )}
+    </Text>
+  );
+}
+
+function RunningCardEdge({ active }: { active: boolean }) {
+  const styles = useAppStyles();
+  const progress = React.useRef(new Animated.Value(0)).current;
+  const [size, setSize] = React.useState({ width: 0, height: 0 });
+
+  React.useEffect(() => {
+    if (!active) {
+      progress.stopAnimation();
+      progress.setValue(0);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.timing(progress, {
+        toValue: 1,
+        duration: 2600,
+        useNativeDriver: true,
+      }),
+    );
+    animation.start();
+    return () => {
+      animation.stop();
+    };
+  }, [active, progress]);
+
+  if (!active) return null;
+
+  const width = Math.max(size.width, 1);
+  const height = Math.max(size.height, 1);
+  const segment = Math.max(42, Math.min(96, width * 0.34));
+  const segmentY = Math.max(42, Math.min(96, height * 0.46));
+  const phaseOpacity = (start: number, end: number) =>
+    progress.interpolate({
+      inputRange: [0, start, start + 0.02, end - 0.02, end, 1],
+      outputRange: [0, 0, 1, 1, 0, 0],
+      extrapolate: "clamp",
+    });
+
+  return (
+    <View
+      pointerEvents="none"
+      style={styles.runningEdge}
+      onLayout={(event) => {
+        const next = event.nativeEvent.layout;
+        if (next.width !== size.width || next.height !== size.height) {
+          setSize({ width: next.width, height: next.height });
+        }
+      }}
+    >
+      <Animated.View
+        style={[
+          styles.runningEdgeSegment,
+          styles.runningEdgeHorizontal,
+          {
+            width: segment,
+            top: 0,
+            opacity: phaseOpacity(0, 0.25),
+            transform: [
+              {
+                translateX: progress.interpolate({
+                  inputRange: [0, 0.25],
+                  outputRange: [-segment, width],
+                  extrapolate: "clamp",
+                }),
+              },
+            ],
+          },
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.runningEdgeSegment,
+          styles.runningEdgeVertical,
+          {
+            height: segmentY,
+            right: 0,
+            opacity: phaseOpacity(0.25, 0.5),
+            transform: [
+              {
+                translateY: progress.interpolate({
+                  inputRange: [0.25, 0.5],
+                  outputRange: [-segmentY, height],
+                  extrapolate: "clamp",
+                }),
+              },
+            ],
+          },
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.runningEdgeSegment,
+          styles.runningEdgeHorizontal,
+          {
+            width: segment,
+            bottom: 0,
+            opacity: phaseOpacity(0.5, 0.75),
+            transform: [
+              {
+                translateX: progress.interpolate({
+                  inputRange: [0.5, 0.75],
+                  outputRange: [width, -segment],
+                  extrapolate: "clamp",
+                }),
+              },
+            ],
+          },
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.runningEdgeSegment,
+          styles.runningEdgeVertical,
+          {
+            height: segmentY,
+            left: 0,
+            opacity: phaseOpacity(0.75, 1),
+            transform: [
+              {
+                translateY: progress.interpolate({
+                  inputRange: [0.75, 1],
+                  outputRange: [height, -segmentY],
+                  extrapolate: "clamp",
+                }),
+              },
+            ],
+          },
+        ]}
+      />
+    </View>
+  );
+}
+
+function MarkdownImageBlock({
+  src,
+  alt,
+  agent,
+  filePath,
+  onOpenPath,
+}: {
+  src: string;
+  alt: string;
+  agent: AgentSession | null;
+  filePath: string;
+  onOpenPath: (path: string) => void;
+}) {
+  const api = useTmuxMobileApi();
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  const remoteUri = /^(?:https?:\/\/|data:image\/)/i.test(src) ? src : "";
+  const [imageUri, setImageUri] = React.useState(remoteUri);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setError("");
+    if (remoteUri) {
+      setImageUri(remoteUri);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setImageUri("");
+    if (!api || !agent?.paneId || !filePath) return;
+    setLoading(true);
+    api
+      .file(agentMachineKey(agent), agent.paneId, filePath)
+      .then((result) => {
+        if (cancelled) return;
+        if (result.kind === "image" || /^image\//i.test(result.contentType || "")) {
+          setImageUri(`data:${result.contentType};base64,${result.base64}`);
+        } else {
+          setError("Not an image");
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agent, api, filePath, remoteUri]);
+
+  const label = alt || filePath || src || "image";
+  const openImage = React.useCallback(() => {
+    if (filePath) {
+      onOpenPath(filePath);
+      return;
+    }
+    if (remoteUri) {
+      Linking.openURL(remoteUri).catch(() => {});
+    }
+  }, [filePath, onOpenPath, remoteUri]);
+
+  return (
+    <Pressable style={styles.markdownImageBlock} onPress={openImage}>
+      {imageUri ? (
+        <Image source={{ uri: imageUri }} style={styles.markdownImage} resizeMode="contain" />
+      ) : (
+        <View style={styles.markdownImagePlaceholder}>
+          {loading ? (
+            <ActivityIndicator color={theme.colors.accent} />
+          ) : (
+            <ImagePlus size={18} color={theme.colors.textMuted} />
+          )}
+          <Text style={styles.markdownImageLabel} numberOfLines={2}>
+            {loading ? "Loading image..." : label}
+          </Text>
+          {error ? (
+            <Text style={styles.markdownImageError} numberOfLines={2}>
+              {error}
+            </Text>
+          ) : null}
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
 function AgentCard({
   agent,
   starred,
@@ -743,6 +1196,7 @@ function AgentCard({
   onView,
   onViewResponse,
   onCopyResponse,
+  onOpenFile,
   responseCopied,
   onTranscript,
 }: {
@@ -757,6 +1211,7 @@ function AgentCard({
   onView: () => void;
   onViewResponse: () => void;
   onCopyResponse: () => void;
+  onOpenFile: (path: string) => void;
   responseCopied: boolean;
   onTranscript: () => void;
 }) {
@@ -764,8 +1219,9 @@ function AgentCard({
   const styles = useAppStyles();
   const icon = AGENT_ICONS[String(agent.kind || "").toLowerCase()];
   const status = agent.waitingForInput ? "waiting" : agent.status || agent.turn || "unverified";
+  const running = status === "running";
   const statusStyle =
-    status === "running"
+    running
       ? styles.statusRunning
       : status === "waiting"
         ? styles.statusWaiting
@@ -774,7 +1230,11 @@ function AgentCard({
           : styles.statusUnknown;
 
   return (
-    <Pressable style={[styles.card, selected ? styles.cardSelected : null]} onPress={onSelect}>
+    <Pressable
+      style={[styles.card, running ? styles.cardRunning : null, selected ? styles.cardSelected : null]}
+      onPress={onSelect}
+    >
+      <RunningCardEdge active={running} />
       <Pressable
         accessibilityLabel={starred ? "Unstar session" : "Star session"}
         accessibilityState={{ selected: starred }}
@@ -838,9 +1298,12 @@ function AgentCard({
         {agent.lastAssistantText ? (
           <View style={styles.responseBlock}>
             <CardSectionHeader label="Last response" timestamp={agent.lastAssistantAt} />
-            <Text style={styles.answerText} numberOfLines={3}>
-              {agent.lastAssistantText}
-            </Text>
+            <LinkedPathText
+              text={agent.lastAssistantText}
+              style={styles.answerText}
+              numberOfLines={3}
+              onOpenPath={onOpenFile}
+            />
             <View style={styles.responseActions}>
               <ActionButton
                 icon={<Maximize2 size={15} color={theme.colors.text} />}
@@ -1441,24 +1904,67 @@ function RenameModal({ target, onClose }: { target: AgentSession | null; onClose
 }
 
 function WindowViewModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
+  const theme = useAppTheme();
   const styles = useAppStyles();
+  const { width: windowWidth } = useWindowDimensions();
   const api = useTmuxMobileApi();
+  const sendText = useSendText();
+  const sendKey = useSendKey();
   const paneTailScrollRef = React.useRef<ScrollView | null>(null);
+  const pollingRef = React.useRef(false);
+  const terminalInputRef = React.useRef("");
+  const terminalDirectNativeTextRef = React.useRef("");
+  const terminalDirectSendQueueRef = React.useRef<Promise<unknown>>(Promise.resolve());
+  const terminalRefreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const terminalSuppressChangeRef = React.useRef(false);
+  const terminalSuppressChangeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const terminalVoiceActiveRef = React.useRef(false);
+  const terminalVoiceResultRef = React.useRef("");
   const [data, setData] = React.useState<WindowViewResponse | null>(null);
+  const [terminalText, setTerminalText] = React.useState("");
+  const [terminalInput, setTerminalInput] = React.useState("");
+  const [terminalRecognizing, setTerminalRecognizing] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [status, setStatus] = React.useState("");
   const [loading, setLoading] = React.useState(false);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const terminalUsesHardwareKeys = windowWidth >= 760;
+
+  React.useEffect(() => {
+    terminalInputRef.current = terminalInput;
+  }, [terminalInput]);
 
   React.useEffect(() => {
     let cancelled = false;
     setData(null);
+    setTerminalText("");
+    setTerminalInput("");
+    terminalInputRef.current = "";
+    terminalDirectNativeTextRef.current = "";
+    terminalSuppressChangeRef.current = false;
+    if (terminalVoiceActiveRef.current) {
+      ExpoSpeechRecognitionModule.stop();
+    }
+    setTerminalRecognizing(false);
+    terminalVoiceActiveRef.current = false;
+    terminalVoiceResultRef.current = "";
     setError("");
-    if (!api || !target?.windowId) return;
+    setStatus("");
+    if (!api || (!target?.windowId && !target?.paneId)) return;
     setLoading(true);
-    api
-      .windowView(agentMachineKey(target), target.windowId, 160)
-      .then((result) => {
-        if (!cancelled) setData(result);
-      })
+    const machine = agentMachineKey(target);
+    const load = target.windowId
+      ? api.windowView(machine, target.windowId, TERMINAL_INITIAL_LINES).then((result) => {
+          if (cancelled) return;
+          setData(result);
+          setTerminalText(result.capture?.text || "");
+        })
+      : api.capture(machine, target.paneId || "", "tail", TERMINAL_INITIAL_LINES).then((result) => {
+          if (cancelled) return;
+          setData(null);
+          setTerminalText(result.text || "");
+        });
+    load
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       })
@@ -1470,7 +1976,165 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     };
   }, [api, target]);
 
-  const terminalText = data?.capture.text || "No output.";
+  React.useEffect(() => {
+    return () => {
+      if (terminalRefreshTimerRef.current) clearTimeout(terminalRefreshTimerRef.current);
+      if (terminalSuppressChangeTimerRef.current) clearTimeout(terminalSuppressChangeTimerRef.current);
+    };
+  }, []);
+
+  const machineId = target ? agentMachineKey(target) : "";
+  const activePaneId = data?.capture?.paneId || data?.activePaneId || target?.paneId || "";
+  const cwd =
+    data?.panes?.find((pane) => pane.id === activePaneId)?.cwd ||
+    data?.directories?.cwd ||
+    target?.cwd ||
+    "";
+  const running = target?.waitingForInput ? "waiting" : target?.status || target?.turn || "";
+  const meta = [running, target?.turnCount ? `${target.turnCount} turns` : "", cwd].filter(Boolean).join(" · ");
+
+  const refreshCapture = React.useCallback(
+    async (silent = false) => {
+      if (!api || !target || !activePaneId) return;
+      if (!silent) {
+        setRefreshing(true);
+        setStatus("Refreshing...");
+      }
+      try {
+        const result = await api.capture(machineId, activePaneId, "tail", TERMINAL_REFRESH_LINES);
+        setTerminalText(result.text || "");
+        setError("");
+        if (!silent) setStatus("Refreshed");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        if (!silent) setStatus("Refresh failed");
+      } finally {
+        if (!silent) setRefreshing(false);
+      }
+    },
+    [activePaneId, api, machineId, target],
+  );
+
+  const scheduleTerminalRefresh = React.useCallback(
+    (delay = 160) => {
+      if (terminalRefreshTimerRef.current) return;
+      terminalRefreshTimerRef.current = setTimeout(() => {
+        terminalRefreshTimerRef.current = null;
+        refreshCapture(true).catch(() => {});
+      }, delay);
+    },
+    [refreshCapture],
+  );
+
+  const enqueueTerminalDirectAction = React.useCallback(
+    (label: string, action: () => Promise<unknown>) => {
+      if (!target) return;
+      terminalDirectSendQueueRef.current = terminalDirectSendQueueRef.current
+        .catch(() => {})
+        .then(action)
+        .then(() => {
+          setError("");
+          scheduleTerminalRefresh();
+        })
+        .catch((err) => {
+          setStatus(`${label} failed`);
+          setError(err instanceof Error ? err.message : String(err));
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        });
+    },
+    [scheduleTerminalRefresh, target],
+  );
+
+  const sendTerminalDirectText = React.useCallback(
+    (text: string) => {
+      if (!api || !target || !activePaneId || !text) return;
+      const machine = machineId;
+      const pane = activePaneId;
+      enqueueTerminalDirectAction("Keyboard input", () => api.sendText(machine, pane, text, false));
+    },
+    [activePaneId, api, enqueueTerminalDirectAction, machineId, target],
+  );
+
+  const sendTerminalDirectKey = React.useCallback(
+    (key: string) => {
+      if (!api || !target || !activePaneId || !key) return;
+      const machine = machineId;
+      const pane = activePaneId;
+      enqueueTerminalDirectAction("Keyboard shortcut", () => api.sendKey(machine, pane, key));
+    },
+    [activePaneId, api, enqueueTerminalDirectAction, machineId, target],
+  );
+
+  const suppressNextTerminalTextChange = React.useCallback(() => {
+    terminalSuppressChangeRef.current = true;
+    if (terminalSuppressChangeTimerRef.current) clearTimeout(terminalSuppressChangeTimerRef.current);
+    terminalSuppressChangeTimerRef.current = setTimeout(() => {
+      terminalSuppressChangeRef.current = false;
+      terminalSuppressChangeTimerRef.current = null;
+    }, 80);
+  }, []);
+
+  const handleTerminalInputChange = React.useCallback(
+    (value: string) => {
+      if (terminalSuppressChangeRef.current) {
+        terminalSuppressChangeRef.current = false;
+        if (terminalSuppressChangeTimerRef.current) {
+          clearTimeout(terminalSuppressChangeTimerRef.current);
+          terminalSuppressChangeTimerRef.current = null;
+        }
+        setTerminalInput(terminalInputRef.current);
+        return;
+      }
+      const current = terminalInputRef.current;
+      if (!current && !value) {
+        terminalDirectNativeTextRef.current = "";
+        setTerminalInput("");
+        return;
+      }
+      if (!current && value) {
+        const previousNativeText = terminalDirectNativeTextRef.current;
+        const directText = value.startsWith(previousNativeText)
+          ? value.slice(previousNativeText.length)
+          : value;
+        terminalDirectNativeTextRef.current = value;
+        sendTerminalDirectText(directText);
+        setTerminalInput("");
+        return;
+      }
+      terminalDirectNativeTextRef.current = "";
+      setTerminalInput(value);
+    },
+    [sendTerminalDirectText],
+  );
+
+  const handleTerminalKeyPress = React.useCallback(
+    (event: { nativeEvent: { key: string } }) => {
+      const key = terminalKeyFromNativeKey(event.nativeEvent.key);
+      if (!key || key === "Enter") return;
+      if (key === "BSpace" && terminalInputRef.current) return;
+      suppressNextTerminalTextChange();
+      sendTerminalDirectKey(key);
+    },
+    [sendTerminalDirectKey, suppressNextTerminalTextChange],
+  );
+
+  React.useEffect(() => {
+    if (!api || !target || !activePaneId) return;
+    const intervalMs = target.status === "running" || target.waitingForInput
+      ? TERMINAL_ACTIVE_REFRESH_MS
+      : TERMINAL_IDLE_REFRESH_MS;
+    const timer = setInterval(() => {
+      if (pollingRef.current) return;
+      pollingRef.current = true;
+      refreshCapture(true)
+        .catch(() => {})
+        .finally(() => {
+          pollingRef.current = false;
+        });
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [activePaneId, api, refreshCapture, target]);
+
   const terminalNodes = React.useMemo(() => renderAnsiText(terminalText), [terminalText]);
   const scrollPaneTailToEnd = React.useCallback((animated = false) => {
     requestAnimationFrame(() => {
@@ -1479,11 +2143,193 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   }, []);
 
   React.useEffect(() => {
-    if (data) scrollPaneTailToEnd(false);
-  }, [data, scrollPaneTailToEnd]);
+    if (terminalText) scrollPaneTailToEnd(false);
+  }, [scrollPaneTailToEnd, terminalText]);
+
+  const copyTerminalOutput = React.useCallback(async () => {
+    await Clipboard.setStringAsync(terminalText || "");
+    setStatus("Output copied");
+    void Haptics.selectionAsync();
+  }, [terminalText]);
+
+  const appendTerminalInput = React.useCallback((value: string) => {
+    const next = String(value || "").trim();
+    if (!next) return;
+    setTerminalInput((current) => {
+      if (!current) return next;
+      return /\s$/.test(current) ? `${current}${next}` : `${current} ${next}`;
+    });
+  }, []);
+
+  useSpeechRecognitionEvent("start", () => {
+    if (!terminalVoiceActiveRef.current) return;
+    setTerminalRecognizing(true);
+    setStatus("Listening...");
+  });
+
+  useSpeechRecognitionEvent("end", () => {
+    if (!terminalVoiceActiveRef.current) return;
+    terminalVoiceActiveRef.current = false;
+    setTerminalRecognizing(false);
+  });
+
+  useSpeechRecognitionEvent("result", (event) => {
+    if (!terminalVoiceActiveRef.current || !event.isFinal) return;
+    const transcript = event.results[0]?.transcript.trim();
+    if (!transcript || transcript === terminalVoiceResultRef.current) return;
+    terminalVoiceResultRef.current = transcript;
+    appendTerminalInput(transcript);
+    setStatus("Voice added");
+    void Haptics.selectionAsync();
+  });
+
+  useSpeechRecognitionEvent("error", (event) => {
+    if (!terminalVoiceActiveRef.current) return;
+    terminalVoiceActiveRef.current = false;
+    setTerminalRecognizing(false);
+    setStatus(event.message || `Voice input failed: ${event.error}`);
+  });
+
+  const toggleTerminalVoice = React.useCallback(async () => {
+    if (terminalRecognizing) {
+      terminalVoiceActiveRef.current = false;
+      ExpoSpeechRecognitionModule.stop();
+      setTerminalRecognizing(false);
+      setStatus("Voice stopped");
+      return;
+    }
+    setStatus("");
+    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+      setStatus("Voice input is not available on this device");
+      return;
+    }
+    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!permission.granted) {
+      setStatus("Voice permission denied");
+      return;
+    }
+    terminalVoiceActiveRef.current = true;
+    terminalVoiceResultRef.current = "";
+    ExpoSpeechRecognitionModule.start({
+      lang: "zh-CN",
+      interimResults: false,
+      maxAlternatives: 1,
+      continuous: false,
+      addsPunctuation: true,
+      contextualStrings: ["CJMUX", "AMUX", "Codex", "Claude", "tmux", "terminal", "session", "agent"],
+    });
+  }, [terminalRecognizing]);
+
+  const afterTerminalSend = React.useCallback(() => {
+    setError("");
+    setStatus("Sent");
+    setTimeout(() => {
+      refreshCapture(true).catch(() => {});
+    }, 220);
+  }, [refreshCapture]);
+
+  const sendTerminalInput = React.useCallback(() => {
+    if (!target || sendText.isPending || sendKey.isPending) return;
+    const value = terminalInput;
+    setStatus("Sending...");
+    if (!value) {
+      sendKey.mutate(
+        { agent: target, key: "Enter" },
+        {
+          onSuccess: afterTerminalSend,
+          onError: (err) => {
+            setStatus("Send failed");
+            setError(err.message);
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          },
+        },
+      );
+      return;
+    }
+    sendText.mutate(
+      { agent: target, text: value, enter: true },
+      {
+        onSuccess: () => {
+          setTerminalInput("");
+          afterTerminalSend();
+        },
+        onError: (err) => {
+          setStatus("Send failed");
+          setError(err.message);
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        },
+      },
+    );
+  }, [afterTerminalSend, sendKey, sendText, target, terminalInput]);
+
+  const sendTerminalKey = React.useCallback(
+    (entry: TerminalKeyEntry) => {
+      if (!target || sendText.isPending || sendKey.isPending) return;
+      if (entry.label === "Enter" && terminalInput) {
+        sendTerminalInput();
+        return;
+      }
+      setStatus(`Sending ${entry.label}...`);
+      if ("command" in entry) {
+        sendText.mutate(
+          { agent: target, text: entry.command, enter: true },
+          {
+            onSuccess: afterTerminalSend,
+            onError: (err) => {
+              setStatus(`${entry.label} failed`);
+              setError(err.message);
+              void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            },
+          },
+        );
+        return;
+      }
+      sendKey.mutate(
+        { agent: target, key: entry.key },
+        {
+          onSuccess: afterTerminalSend,
+          onError: (err) => {
+            setStatus(`${entry.label} failed`);
+            setError(err.message);
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          },
+        },
+      );
+    },
+    [afterTerminalSend, sendKey, sendText, sendTerminalInput, target, terminalInput],
+  );
 
   return (
-    <SheetModal visible={Boolean(target)} title="Pane tail" onClose={onClose} tall>
+    <SheetModal visible={Boolean(target)} title="Terminal" onClose={onClose} tall wide fullscreenOnWide>
+      <View style={styles.terminalToolbar}>
+        <View style={styles.terminalMetaBlock}>
+          <Text style={styles.terminalTitleLine} numberOfLines={1}>
+            {target ? agentTitle(target) : ""}
+          </Text>
+          <Text style={styles.sheetMeta} numberOfLines={1}>
+            {meta}
+          </Text>
+        </View>
+        <View style={styles.terminalToolbarActions}>
+          <ActionButton
+            icon={refreshing ? <ActivityIndicator color={theme.colors.text} /> : <RefreshCcw size={15} color={theme.colors.text} />}
+            label="Refresh terminal"
+            disabled={!target || refreshing}
+            onPress={() => {
+              refreshCapture(false).catch(() => {});
+            }}
+          />
+          <ActionButton
+            icon={<Copy size={15} color={theme.colors.text} />}
+            label="Copy terminal output"
+            disabled={!terminalText}
+            onPress={() => {
+              copyTerminalOutput().catch(() => {});
+            }}
+          />
+        </View>
+      </View>
+      {status ? <Text style={styles.terminalStatusLine} numberOfLines={1}>{status}</Text> : null}
       {loading ? <ActivityIndicator /> : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <ScrollView
@@ -1491,8 +2337,69 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         style={styles.terminalBox}
         onContentSizeChange={() => scrollPaneTailToEnd(false)}
       >
-        <Text style={styles.terminalText}>{terminalNodes}</Text>
+        <Text style={styles.terminalText}>{terminalText ? terminalNodes : "No output."}</Text>
       </ScrollView>
+      <View style={styles.terminalComposer}>
+        <Pressable
+          accessibilityLabel={terminalRecognizing ? "Stop terminal voice input" : "Start terminal voice input"}
+          style={[styles.terminalVoiceButton, terminalRecognizing ? styles.terminalVoiceButtonActive : null]}
+          disabled={!target}
+          onPress={() => {
+            toggleTerminalVoice().catch((err) => {
+              terminalVoiceActiveRef.current = false;
+              setTerminalRecognizing(false);
+              setStatus(err instanceof Error ? err.message : String(err));
+            });
+          }}
+        >
+          {terminalRecognizing ? (
+            <VoiceWaveform />
+          ) : (
+            <Mic size={17} color={theme.colors.text} />
+          )}
+        </Pressable>
+        <TextInput
+          value={terminalInput}
+          onChangeText={handleTerminalInputChange}
+          onKeyPress={handleTerminalKeyPress}
+          autoFocus={terminalUsesHardwareKeys}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="send"
+          showSoftInputOnFocus={!terminalUsesHardwareKeys}
+          submitBehavior="submit"
+          onSubmitEditing={sendTerminalInput}
+          style={styles.terminalInput}
+          placeholder="Type and press Enter"
+          placeholderTextColor={theme.colors.textMuted}
+        />
+        <Pressable
+          accessibilityLabel="Send terminal input"
+          style={[styles.terminalSendButton, sendText.isPending || sendKey.isPending ? styles.disabledButton : null]}
+          disabled={!target || sendText.isPending || sendKey.isPending}
+          onPress={sendTerminalInput}
+        >
+          {sendText.isPending || sendKey.isPending ? (
+            <ActivityIndicator color={theme.colors.surfaceRaised} />
+          ) : (
+            <Send size={17} color={theme.colors.surfaceRaised} />
+          )}
+        </Pressable>
+      </View>
+      <View style={styles.terminalKeyGrid}>
+        {TERMINAL_INPUT_KEYS.map((entry) => (
+          <Pressable
+            key={entry.label}
+            style={[styles.terminalKeyButton, entry.danger ? styles.terminalKeyButtonDanger : null]}
+            disabled={!target || sendText.isPending || sendKey.isPending}
+            onPress={() => sendTerminalKey(entry)}
+          >
+            <Text style={[styles.terminalKeyText, entry.danger ? styles.terminalKeyTextDanger : null]}>
+              {entry.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
     </SheetModal>
   );
 }
@@ -1501,11 +2408,13 @@ function ResponseModal({
   target,
   copied,
   onCopy,
+  onOpenFile,
   onClose,
 }: {
   target: AgentSession | null;
   copied: boolean;
   onCopy: (agent: AgentSession) => void;
+  onOpenFile: (agent: AgentSession, path: string) => void;
   onClose: () => void;
 }) {
   const api = useTmuxMobileApi();
@@ -1515,8 +2424,31 @@ function ResponseModal({
   const [pinStatus, setPinStatus] = React.useState("");
   const text = target?.lastAssistantText || "";
   const markdownStyle = React.useMemo(() => createMarkdownStyles(theme), [theme]);
+  const openAgentFile = React.useCallback(
+    (path: string) => {
+      if (!target) return;
+      onOpenFile(target, path);
+    },
+    [onOpenFile, target],
+  );
+  const markdownRules = React.useMemo(
+    () => createMarkdownPathRules(openAgentFile, { agent: target }),
+    [openAgentFile, target],
+  );
+  const handleMarkdownLinkPress = React.useCallback(
+    (url: string) => {
+      const filePath = filePathFromLocalHref(url);
+      if (filePath) {
+        openAgentFile(filePath);
+        return false;
+      }
+      Linking.openURL(url).catch(() => {});
+      return false;
+    },
+    [openAgentFile],
+  );
   React.useEffect(() => {
-    if (target) setPinStatus("");
+    setPinStatus("");
   }, [target]);
 
   const pinResponse = React.useCallback(() => {
@@ -1552,7 +2484,7 @@ function ResponseModal({
   }, [api, pinArtifact, target, text]);
 
   return (
-    <SheetModal visible={Boolean(target)} title="Last response" onClose={onClose} tall>
+    <SheetModal visible={Boolean(target)} title="Last response" onClose={onClose} tall wide>
       <View style={styles.responseSheetMetaRow}>
         <Text style={styles.sheetMeta} numberOfLines={1}>
           {target ? agentTitle(target) : ""}
@@ -1587,18 +2519,253 @@ function ResponseModal({
       </View>
       {pinStatus ? <Text style={styles.sheetMeta} numberOfLines={1}>{pinStatus}</Text> : null}
       <ScrollView style={styles.responseFullBox}>
-        <Markdown style={markdownStyle}>{text || "No response."}</Markdown>
+        <Markdown
+          style={markdownStyle}
+          rules={markdownRules}
+          onLinkPress={handleMarkdownLinkPress}
+        >
+          {text || "No response."}
+        </Markdown>
       </ScrollView>
     </SheetModal>
   );
 }
 
-function TranscriptModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
+function FilePreviewModal({
+  target,
+  onOpenPath,
+  onClose,
+}: {
+  target: AgentFileTarget | null;
+  onOpenPath: (path: string) => void;
+  onClose: () => void;
+}) {
+  const api = useTmuxMobileApi();
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  const pinFile = usePinFileArtifact();
+  const [data, setData] = React.useState<AgentFileResponse | null>(null);
+  const [error, setError] = React.useState("");
+  const [status, setStatus] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const markdownStyle = React.useMemo(() => createMarkdownStyles(theme), [theme]);
+  const markdownRules = React.useMemo(
+    () =>
+      createMarkdownPathRules((path) => {
+        setStatus("");
+        onOpenPath(path);
+      }, { agent: target?.agent || null, basePath: target?.path || "" }),
+    [onOpenPath, target],
+  );
+  const handleMarkdownLinkPress = React.useCallback(
+    (url: string) => {
+      const filePath = filePathFromLocalHref(url, target?.path || "");
+      if (filePath) {
+        setStatus("");
+        onOpenPath(filePath);
+        return false;
+      }
+      Linking.openURL(url).catch(() => {});
+      return false;
+    },
+    [onOpenPath, target],
+  );
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setData(null);
+    setError("");
+    setStatus("");
+    if (!api || !target?.agent.paneId) return;
+    setLoading(true);
+    api
+      .file(agentMachineKey(target.agent), target.agent.paneId, target.path)
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, target]);
+
+  const canRenderText =
+    Boolean(data) &&
+    data?.kind !== "image" &&
+    (/^text\//i.test(data?.contentType || "") || data?.kind === "markdown") &&
+    Number(data?.size || 0) <= 5 * 1024 * 1024;
+  const textContent = React.useMemo(() => {
+    if (!data || !canRenderText) return "";
+    return decodeBase64Utf8(data.base64);
+  }, [canRenderText, data]);
+
+  const copyPath = React.useCallback(async () => {
+    if (!target) return;
+    await Clipboard.setStringAsync(target.path);
+    setStatus("Path copied.");
+    void Haptics.selectionAsync();
+  }, [target]);
+
+  const openInBrowser = React.useCallback(() => {
+    if (!api || !target) return;
+    Linking.openURL(agentFileBrowserUrl(api, target.agent, target.path)).catch((err) => {
+      setStatus(err instanceof Error ? err.message : String(err));
+    });
+  }, [api, target]);
+
+  const pinCurrentFile = React.useCallback(() => {
+    if (!api || !target || pinFile.isPending) return;
+    setStatus("Pinning...");
+    pinFile.mutate(
+      { agent: target.agent, path: target.path },
+      {
+        onSuccess: async (result) => {
+          const link = api.url(result.pin.shareUrl).toString();
+          try {
+            await Clipboard.setStringAsync(link);
+            setStatus("Pinned. Link copied.");
+          } catch {
+            setStatus(link);
+          }
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        },
+        onError: (err) => {
+          setStatus(err instanceof Error ? err.message : String(err));
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        },
+      },
+    );
+  }, [api, pinFile, target]);
+
+  const meta = [
+    data?.name || target?.path || "",
+    data?.contentType || "",
+    formatPinSize(data?.size),
+    data?.truncated ? "truncated" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <SheetModal visible={Boolean(target)} title="File" onClose={onClose} tall wide>
+      <View style={styles.responseSheetMetaRow}>
+        <Text style={styles.sheetMeta} numberOfLines={1}>
+          {meta || target?.path || ""}
+        </Text>
+        <View style={styles.responseHeaderActions}>
+          <ActionButton
+            icon={
+              pinFile.isPending ? (
+                <ActivityIndicator color={theme.colors.text} />
+              ) : (
+                <Pin size={15} color={theme.colors.text} />
+              )
+            }
+            label="Pin file as artifact"
+            disabled={!target || !data || data.truncated || pinFile.isPending}
+            onPress={pinCurrentFile}
+          />
+          <ActionButton
+            icon={<ExternalLink size={15} color={theme.colors.text} />}
+            label="Open in browser"
+            disabled={!target}
+            onPress={openInBrowser}
+          />
+          <ActionButton
+            icon={<Copy size={15} color={theme.colors.text} />}
+            label="Copy path"
+            disabled={!target}
+            onPress={() => {
+              copyPath().catch(() => {});
+            }}
+          />
+        </View>
+      </View>
+      {target?.path ? (
+        <Text style={styles.filePathMeta} numberOfLines={2}>
+          {target.path}
+        </Text>
+      ) : null}
+      {status ? <Text style={styles.sheetMeta} numberOfLines={2}>{status}</Text> : null}
+      {loading ? <ActivityIndicator color={theme.colors.accent} /> : null}
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      {data?.kind === "image" ? (
+        <View style={styles.fileImageFrame}>
+          <Image
+            source={{ uri: `data:${data.contentType};base64,${data.base64}` }}
+            style={styles.fileImage}
+            resizeMode="contain"
+          />
+        </View>
+      ) : canRenderText ? (
+        <ScrollView style={styles.responseFullBox}>
+          {data?.kind === "markdown" ? (
+            <Markdown
+              style={markdownStyle}
+              rules={markdownRules}
+              onLinkPress={handleMarkdownLinkPress}
+            >
+              {textContent || "(empty file)"}
+            </Markdown>
+          ) : (
+            <Text style={styles.terminalText}>{textContent || "(empty file)"}</Text>
+          )}
+        </ScrollView>
+      ) : !loading && !error ? (
+        <View style={styles.fileUnsupportedBox}>
+          <Text style={styles.emptyTitle}>Preview unavailable</Text>
+          <Text style={styles.emptyText}>
+            Open it in the browser, or pin it as a shareable artifact.
+          </Text>
+        </View>
+      ) : null}
+    </SheetModal>
+  );
+}
+
+function TranscriptModal({
+  target,
+  onOpenFile,
+  onClose,
+}: {
+  target: AgentSession | null;
+  onOpenFile: (agent: AgentSession, path: string) => void;
+  onClose: () => void;
+}) {
+  const theme = useAppTheme();
   const styles = useAppStyles();
   const api = useTmuxMobileApi();
   const [data, setData] = React.useState<AgentTranscriptResponse | null>(null);
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
+  const markdownStyle = React.useMemo(() => createMarkdownStyles(theme), [theme]);
+  const openTranscriptFile = React.useCallback(
+    (path: string) => {
+      if (target) onOpenFile(target, path);
+    },
+    [onOpenFile, target],
+  );
+  const markdownRules = React.useMemo(
+    () => createMarkdownPathRules(openTranscriptFile, { agent: target }),
+    [openTranscriptFile, target],
+  );
+  const handleMarkdownLinkPress = React.useCallback(
+    (url: string) => {
+      const filePath = filePathFromLocalHref(url);
+      if (filePath) {
+        openTranscriptFile(filePath);
+        return false;
+      }
+      Linking.openURL(url).catch(() => {});
+      return false;
+    },
+    [openTranscriptFile],
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -1624,7 +2791,7 @@ function TranscriptModal({ target, onClose }: { target: AgentSession | null; onC
 
   const turns = data?.result?.turns || [];
   return (
-    <SheetModal visible={Boolean(target)} title="Transcript" onClose={onClose} tall>
+    <SheetModal visible={Boolean(target)} title="Transcript" onClose={onClose} tall wide>
       {loading ? <ActivityIndicator /> : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <ScrollView style={styles.transcriptBox}>
@@ -1632,7 +2799,21 @@ function TranscriptModal({ target, onClose }: { target: AgentSession | null; onC
         {turns.map((turn, index) => (
           <View key={`${index}-${turn.role}`} style={styles.turnRow}>
             <Text style={styles.turnRole}>{turn.role || "turn"}</Text>
-            <Text style={styles.turnText}>{turn.text || ""}</Text>
+            {turn.role === "assistant" ? (
+              <Markdown
+                style={markdownStyle}
+                rules={markdownRules}
+                onLinkPress={handleMarkdownLinkPress}
+              >
+                {turn.text || ""}
+              </Markdown>
+            ) : (
+              <LinkedPathText
+                text={turn.text || ""}
+                style={styles.turnText}
+                onOpenPath={openTranscriptFile}
+              />
+            )}
           </View>
         ))}
       </ScrollView>
@@ -1737,7 +2918,7 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
   );
 
   return (
-    <SheetModal visible={visible} title="Pinned artifacts" onClose={onClose} tall>
+    <SheetModal visible={visible} title="Pinned artifacts" onClose={onClose} tall wide>
       <View style={styles.responseSheetMetaRow}>
         <Text style={styles.sheetMeta} numberOfLines={1}>
           {pins.isLoading ? "Loading..." : `${data.length} pin${data.length === 1 ? "" : "s"}`}
@@ -1762,6 +2943,7 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
       ) : null}
       <FlatList
         data={data}
+        style={styles.pinsViewport}
         keyExtractor={(pin) => pin.id}
         contentContainerStyle={[styles.pinsList, data.length === 0 ? styles.emptyList : null]}
         refreshControl={
@@ -1978,12 +3160,16 @@ function SheetModal({
   children,
   onClose,
   tall,
+  wide,
+  fullscreenOnWide,
 }: {
   visible: boolean;
   title: string;
   children: React.ReactNode;
   onClose: () => void;
   tall?: boolean;
+  wide?: boolean;
+  fullscreenOnWide?: boolean;
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
@@ -1999,8 +3185,15 @@ function SheetModal({
 
   React.useEffect(() => {
     if (!visible) return;
-    const updateKeyboardHeight = (event: { endCoordinates: { screenY: number } }) => {
-      setKeyboardHeight(Math.max(0, windowHeight - event.endCoordinates.screenY));
+    const updateKeyboardHeight = (event: { endCoordinates?: { screenY?: number; height?: number } }) => {
+      const screenY = Number(event.endCoordinates?.screenY ?? windowHeight);
+      const frameHeight = Number(event.endCoordinates?.height ?? 0);
+      const overlapHeight = Math.max(0, Math.min(windowHeight, windowHeight - screenY));
+      const reportedHeight = Math.max(0, Math.min(windowHeight, frameHeight));
+      const nextHeight = overlapHeight || reportedHeight;
+      const implausibleWideFrame =
+        windowWidth >= 760 && (screenY <= 0 || nextHeight > windowHeight * 0.58);
+      setKeyboardHeight(implausibleWideFrame ? 0 : nextHeight);
     };
     const clearKeyboardHeight = () => setKeyboardHeight(0);
     const subscriptions =
@@ -2016,7 +3209,7 @@ function SheetModal({
     return () => {
       subscriptions.forEach((subscription) => subscription.remove());
     };
-  }, [visible, windowHeight]);
+  }, [visible, windowHeight, windowWidth]);
 
   const sheetGestureStyle = React.useMemo(
     () => ({
@@ -2080,18 +3273,27 @@ function SheetModal({
     [closeSheet, dragY, resetDrag],
   );
 
-  const keyboardOffset = visible ? keyboardHeight : 0;
-  const keyboardGap = keyboardOffset > 0 ? 10 : 0;
   const sheetIsWide = windowWidth >= 760;
-  const availableSheetHeight = Math.max(220, windowHeight - keyboardOffset - keyboardGap - insets.top - 14);
-  const heightRatio = tall ? (sheetIsWide ? 0.9 : 0.94) : sheetIsWide ? 0.76 : 0.82;
-  const maxSheetHeight = Math.min(windowHeight * heightRatio, availableSheetHeight);
+  const keyboardAffectsSheet = !sheetIsWide || !tall;
+  const keyboardOffset = visible && keyboardAffectsSheet ? keyboardHeight : 0;
+  const keyboardGap = keyboardOffset > 0 ? 10 : 0;
+  const fullscreenActive = Boolean(fullscreenOnWide && sheetIsWide);
+  const availableSheetHeight = Math.max(
+    220,
+    windowHeight - keyboardOffset - keyboardGap - (fullscreenActive ? 0 : insets.top + 14),
+  );
+  const heightRatio = tall ? (wide && sheetIsWide ? 0.96 : sheetIsWide ? 0.9 : 0.94) : sheetIsWide ? 0.76 : 0.82;
+  const maxSheetHeight = fullscreenActive ? availableSheetHeight : Math.min(windowHeight * heightRatio, availableSheetHeight);
   const sheetFrameStyle = {
+    height: fullscreenActive || tall ? maxSheetHeight : undefined,
     maxHeight: maxSheetHeight,
-    marginBottom: keyboardOffset + keyboardGap,
+    marginBottom: fullscreenActive ? keyboardOffset + keyboardGap : keyboardOffset + keyboardGap,
+    paddingTop: fullscreenActive ? insets.top + 12 : undefined,
     paddingBottom: keyboardOffset > 0 ? 16 : insets.bottom + 16,
-    borderBottomLeftRadius: keyboardOffset > 0 ? 18 : 0,
-    borderBottomRightRadius: keyboardOffset > 0 ? 18 : 0,
+    borderTopLeftRadius: fullscreenActive ? 0 : undefined,
+    borderTopRightRadius: fullscreenActive ? 0 : undefined,
+    borderBottomLeftRadius: fullscreenActive ? 0 : keyboardOffset > 0 ? 18 : 0,
+    borderBottomRightRadius: fullscreenActive ? 0 : keyboardOffset > 0 ? 18 : 0,
     backgroundColor: theme.colors.surface,
   };
 
@@ -2118,20 +3320,27 @@ function SheetModal({
       <View style={styles.modalRoot}>
         <View style={styles.modalBackdrop}>
           <Pressable accessibilityLabel="Dismiss sheet" style={styles.modalBackdropTouch} onPress={closeSheet} />
-          <View pointerEvents="box-none" style={styles.modalKeyboard}>
+          <View
+            pointerEvents="box-none"
+            style={[styles.modalKeyboard, fullscreenActive ? styles.modalKeyboardFullscreen : null]}
+          >
             <Animated.View
               {...panResponder.panHandlers}
               style={[
                 styles.sheet,
+                wide ? styles.sheetWide : null,
                 tall ? styles.sheetTall : null,
+                fullscreenActive ? styles.sheetFullscreen : null,
                 sheetFrameStyle,
                 sheetGestureStyle,
               ]}
             >
               <View style={styles.sheetGestureZone}>
-                <View style={styles.sheetDragArea}>
-                  <View style={styles.sheetGrabber} />
-                </View>
+                {fullscreenActive ? null : (
+                  <View style={styles.sheetDragArea}>
+                    <View style={styles.sheetGrabber} />
+                  </View>
+                )}
                 <View style={styles.sheetHeader}>
                   <Text style={styles.sheetTitle} numberOfLines={1}>
                     {title}
@@ -2218,6 +3427,10 @@ function createMarkdownStyles(theme: AppTheme) {
       color: theme.colors.text,
     },
     link: {
+      color: theme.colors.accent,
+      textDecorationLine: "underline",
+    },
+    filePathLink: {
       color: theme.colors.accent,
       textDecorationLine: "underline",
     },
@@ -2522,15 +3735,37 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
 	    position: "relative",
 	    minWidth: 0,
 	    borderRadius: theme.radii.xl,
-    backgroundColor: theme.colors.surfaceRaised,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+	    backgroundColor: theme.colors.surfaceRaised,
+	    borderWidth: 1,
+	    borderColor: theme.colors.border,
 	    padding: layout.cardPadding,
 	    gap: 10,
 	  },
-  cardSelected: {
-    borderColor: theme.colors.accent,
-  },
+	  cardRunning: {
+	    borderColor: theme.dark ? "rgba(90, 150, 204, 0.42)" : "rgba(53, 89, 122, 0.42)",
+	  },
+	  cardSelected: {
+	    borderColor: theme.colors.accent,
+	  },
+	  runningEdge: {
+	    ...StyleSheet.absoluteFill,
+	    borderRadius: theme.radii.xl,
+	    overflow: "hidden",
+	    zIndex: 1,
+	  },
+	  runningEdgeSegment: {
+	    position: "absolute",
+	    backgroundColor: theme.colors.accent,
+	    opacity: 0.86,
+	  },
+	  runningEdgeHorizontal: {
+	    left: 0,
+	    height: 2,
+	  },
+	  runningEdgeVertical: {
+	    top: 0,
+	    width: 2,
+	  },
 	  starButton: {
 	    position: "absolute",
 	    left: layout.cardPadding,
@@ -2672,11 +3907,15 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     padding: 10,
     gap: 8,
   },
-  answerText: {
-    ...theme.typography.body,
-    color: theme.colors.textMuted,
-  },
-  responseActions: {
+	  answerText: {
+	    ...theme.typography.body,
+	    color: theme.colors.textMuted,
+	  },
+	  inlineFileLink: {
+	    color: theme.colors.accent,
+	    textDecorationLine: "underline",
+	  },
+	  responseActions: {
     flexDirection: "row",
     justifyContent: "flex-end",
     gap: 8,
@@ -2971,15 +4210,28 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
 	    paddingHorizontal: layout.isWide ? layout.gutter : 0,
 	    justifyContent: "flex-end",
 	  },
+  modalKeyboardFullscreen: {
+    paddingHorizontal: 0,
+  },
 	  sheet: {
 	    width: "100%",
 	    minWidth: 0,
 	    maxWidth: layout.sheetMaxWidth,
-	    alignSelf: "center",
+    alignSelf: "center",
     maxHeight: "82%",
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     padding: 16,
+  },
+  sheetWide: {
+    maxWidth: layout.contentMaxWidth,
+  },
+  sheetFullscreen: {
+    maxWidth: "100%",
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
   },
   sheetTall: {
     height: "92%",
@@ -3072,10 +4324,108 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     backgroundColor: theme.colors.surfaceRaised,
     padding: 12,
   },
-  responseFullText: {
+	  responseFullText: {
+	    minWidth: 0,
+	    ...theme.typography.body,
+	    color: theme.colors.text,
+	  },
+	  filePathMeta: {
+	    minWidth: 0,
+	    ...theme.typography.mono,
+	    color: theme.colors.textMuted,
+	  },
+	  fileImageFrame: {
+	    flex: 1,
+	    minHeight: 0,
+	    minWidth: 0,
+	    borderRadius: theme.radii.lg,
+	    borderWidth: 1,
+	    borderColor: theme.colors.border,
+	    backgroundColor: theme.colors.surfaceRaised,
+	    overflow: "hidden",
+	  },
+	  fileImage: {
+	    width: "100%",
+	    height: "100%",
+	  },
+  fileUnsupportedBox: {
+    flex: 1,
+    minHeight: 0,
     minWidth: 0,
-    ...theme.typography.body,
+	    borderRadius: theme.radii.lg,
+	    borderWidth: 1,
+	    borderColor: theme.colors.border,
+	    backgroundColor: theme.colors.surfaceRaised,
+	    padding: 18,
+	    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  markdownImageBlock: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 180,
+    maxHeight: 420,
+    aspectRatio: 16 / 9,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    overflow: "hidden",
+    marginVertical: 8,
+  },
+  markdownImage: {
+    width: "100%",
+    height: "100%",
+    minHeight: 180,
+  },
+  markdownImagePlaceholder: {
+    minHeight: 180,
+    padding: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  markdownImageLabel: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    textAlign: "center",
+  },
+  markdownImageError: {
+    ...theme.typography.meta,
+    color: theme.colors.danger,
+    textAlign: "center",
+  },
+  terminalToolbar: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  terminalMetaBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  terminalTitleLine: {
+    minWidth: 0,
+    ...theme.typography.section,
     color: theme.colors.text,
+  },
+  terminalToolbarActions: {
+    flexShrink: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  terminalStatusLine: {
+    width: "100%",
+    minWidth: 0,
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
   },
   terminalBox: {
     flex: 1,
@@ -3092,7 +4442,82 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     ...theme.typography.mono,
     color: "#edece5",
   },
+  terminalComposer: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  terminalInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 44,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    paddingHorizontal: 12,
+    ...theme.typography.mono,
+    color: theme.colors.text,
+  },
+  terminalVoiceButton: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  terminalVoiceButtonActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
+  terminalSendButton: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radii.lg,
+    backgroundColor: theme.colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  terminalKeyGrid: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  terminalKeyButton: {
+    minWidth: 48,
+    height: 40,
+    paddingHorizontal: 10,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  terminalKeyButtonDanger: {
+    borderColor: theme.colors.danger,
+  },
+  terminalKeyText: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+  },
+  terminalKeyTextDanger: {
+    color: theme.colors.danger,
+  },
   transcriptBox: {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+  },
+  pinsViewport: {
     flex: 1,
     minHeight: 0,
     minWidth: 0,

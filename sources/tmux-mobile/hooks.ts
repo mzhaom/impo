@@ -171,6 +171,25 @@ export function usePinInlineArtifact() {
   });
 }
 
+export function usePinFileArtifact() {
+  const api = useTmuxMobileApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ agent, path }: { agent: AgentSession; path: string }) => {
+      if (!api) throw new Error("Not signed in");
+      if (!agent.paneId) throw new Error("Session has no active pane");
+      return api.pinFileArtifact({
+        machineId: agentMachineKey(agent),
+        paneId: agent.paneId,
+        path,
+      });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: pinsKey });
+    },
+  });
+}
+
 export function useRenamePin() {
   const api = useTmuxMobileApi();
   const queryClient = useQueryClient();

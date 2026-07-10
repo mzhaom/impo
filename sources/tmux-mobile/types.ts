@@ -123,6 +123,16 @@ export interface PinArtifactResponse {
   persisted?: boolean;
 }
 
+export interface AgentFileResponse {
+  path: string;
+  name: string;
+  kind: "image" | "markdown" | "external" | string;
+  contentType: string;
+  base64: string;
+  size?: number;
+  truncated?: boolean;
+}
+
 export interface CommandCenterResponse {
   machines: Machine[];
   agents: AgentSession[];
@@ -143,6 +153,13 @@ export interface WindowViewResponse {
     parent?: string;
     error?: string | null;
   };
+}
+
+export interface PaneCaptureResponse {
+  paneId: string;
+  mode: string;
+  lines: number;
+  text: string;
 }
 
 export interface AgentTranscriptResponse {

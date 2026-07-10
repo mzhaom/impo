@@ -2,12 +2,14 @@ import Constants from "expo-constants";
 import { EncodingType, readAsStringAsync } from "expo-file-system/legacy";
 import { toByteArray } from "base64-js";
 import type {
+  AgentFileResponse,
   AgentTranscriptResponse,
   PinArtifactResponse,
   CardStarsResponse,
   CommandCenterResponse,
   DeviceLoginResult,
   DeviceLoginStart,
+  PaneCaptureResponse,
   PinsResponse,
   WindowViewResponse,
 } from "./types";
@@ -205,6 +207,24 @@ export class TmuxMobileApi {
     });
   }
 
+  file(machineId: string, paneId: string, path: string): Promise<AgentFileResponse> {
+    const params = new URLSearchParams({ paneId, path });
+    return this.request(`/api/file?${params.toString()}`, { machineId });
+  }
+
+  pinFileArtifact(input: {
+    machineId: string;
+    paneId: string;
+    path: string;
+  }): Promise<PinArtifactResponse> {
+    const params = new URLSearchParams({ paneId: input.paneId, path: input.path });
+    return this.request(`/api/pins?${params.toString()}`, {
+      method: "POST",
+      machineId: input.machineId,
+      body: {},
+    });
+  }
+
   renameWindow(machineId: string, windowId: string, name: string): Promise<unknown> {
     return this.request("/api/windows", {
       method: "PATCH",
@@ -260,6 +280,11 @@ export class TmuxMobileApi {
   windowView(machineId: string, windowId: string, lines = 120): Promise<WindowViewResponse> {
     const params = new URLSearchParams({ windowId, lines: String(lines) });
     return this.request(`/api/window-view?${params.toString()}`, { machineId });
+  }
+
+  capture(machineId: string, paneId: string, mode = "tail", lines = 260): Promise<PaneCaptureResponse> {
+    const params = new URLSearchParams({ paneId, mode, lines: String(lines) });
+    return this.request(`/api/capture?${params.toString()}`, { machineId });
   }
 
   transcript(machineId: string, paneId: string): Promise<AgentTranscriptResponse> {

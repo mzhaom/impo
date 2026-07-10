@@ -2,7 +2,7 @@ const variant = process.env.APP_ENV || "development";
 
 export default {
   expo: {
-    name: "AMUX",
+    name: "CJMUX",
     slug: "tmux-mobile-mobile",
     version: "0.1.0",
     runtimeVersion: "1",
@@ -19,9 +19,9 @@ export default {
       },
       infoPlist: {
         NSMicrophoneUsageDescription:
-          "Allow AMUX to access your microphone for voice commands.",
+          "Allow CJMUX to access your microphone for voice commands.",
         NSSpeechRecognitionUsageDescription:
-          "Allow AMUX to transcribe your voice into prompts.",
+          "Allow CJMUX to transcribe your voice into prompts.",
       },
     },
     android: {
@@ -55,9 +55,9 @@ export default {
         "expo-speech-recognition",
         {
           microphonePermission:
-            "Allow AMUX to access your microphone for voice commands.",
+            "Allow CJMUX to access your microphone for voice commands.",
           speechRecognitionPermission:
-            "Allow AMUX to transcribe your voice into prompts.",
+            "Allow CJMUX to transcribe your voice into prompts.",
         },
       ],
       "expo-system-ui",
@@ -66,7 +66,7 @@ export default {
         "expo-image-picker",
         {
           photosPermission:
-            "Allow AMUX to pick images and send them to tmux panes.",
+            "Allow CJMUX to pick images and send them to tmux panes.",
         },
       ],
       [
