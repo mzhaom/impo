@@ -923,7 +923,9 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
 
   return (
     <SheetModal visible={Boolean(target)} title="Send to pane" onClose={onClose}>
-      <Text style={styles.sheetMeta}>{target ? agentTitle(target) : ""}</Text>
+      <Text style={styles.sheetMeta} numberOfLines={2}>
+        {target ? agentTitle(target) : ""}
+      </Text>
       <View style={styles.shortcutRow}>
         {PROMPT_SHORTCUTS.map((shortcut) => (
           <Pressable key={shortcut.label} style={styles.shortcutChip} onPress={() => appendText(shortcut.text)}>
@@ -1012,8 +1014,18 @@ function RenameModal({ target, onClose }: { target: AgentSession | null; onClose
 
   return (
     <SheetModal visible={Boolean(target)} title="Rename window" onClose={onClose}>
-      <Text style={styles.sheetMeta}>{target ? agentSubtitle(target) : ""}</Text>
-      <TextInput value={name} onChangeText={setName} autoFocus style={styles.textInput} />
+      <Text style={styles.sheetMeta} numberOfLines={2}>
+        {target ? agentSubtitle(target) : ""}
+      </Text>
+      <TextInput
+        value={name}
+        onChangeText={setName}
+        autoFocus
+        autoCapitalize="none"
+        autoCorrect={false}
+        numberOfLines={1}
+        style={styles.textInput}
+      />
       <Pressable
         style={[styles.primaryButton, rename.isPending ? styles.disabledButton : null]}
         disabled={!target || rename.isPending || !name.trim()}
@@ -1282,6 +1294,24 @@ function SheetModal({
   const theme = useAppTheme();
   const styles = useAppStyles();
   const insets = useSafeAreaInsets();
+  const body = tall ? (
+    <View style={[styles.sheetBody, styles.sheetBodyTall, styles.sheetContent, styles.sheetContentTall]}>
+      {children}
+    </View>
+  ) : (
+    <KeyboardAwareScrollView
+      style={styles.sheetBody}
+      contentContainerStyle={styles.sheetContent}
+      keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+      keyboardShouldPersistTaps="handled"
+      bottomOffset={insets.bottom + 24}
+      extraKeyboardSpace={12}
+      showsVerticalScrollIndicator={false}
+    >
+      {children}
+    </KeyboardAwareScrollView>
+  );
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
@@ -1298,22 +1328,14 @@ function SheetModal({
             ]}
           >
             <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>{title}</Text>
+              <Text style={styles.sheetTitle} numberOfLines={1}>
+                {title}
+              </Text>
               <Pressable style={styles.iconButton} onPress={onClose}>
                 <X size={18} color={theme.colors.text} />
               </Pressable>
             </View>
-            <KeyboardAwareScrollView
-              style={[styles.sheetBody, tall ? styles.sheetBodyTall : null]}
-              contentContainerStyle={[styles.sheetContent, tall ? styles.sheetContentTall : null]}
-              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-              keyboardShouldPersistTaps="handled"
-              bottomOffset={insets.bottom + 24}
-              extraKeyboardSpace={12}
-              showsVerticalScrollIndicator={false}
-            >
-              {children}
-            </KeyboardAwareScrollView>
+            {body}
           </View>
         </KeyboardAvoidingView>
       </View>
@@ -1358,6 +1380,7 @@ function createStyles(theme: AppTheme) {
     marginLeft: 12,
   },
   iconButton: {
+    flexShrink: 0,
     width: 38,
     height: 38,
     borderRadius: theme.radii.lg,
@@ -1407,6 +1430,8 @@ function createStyles(theme: AppTheme) {
     justifyContent: "flex-end",
   },
   primaryButton: {
+    width: "100%",
+    minWidth: 0,
     minHeight: 42,
     paddingHorizontal: 14,
     borderRadius: theme.radii.lg,
@@ -1437,6 +1462,7 @@ function createStyles(theme: AppTheme) {
     backgroundColor: theme.colors.surface,
   },
   errorText: {
+    minWidth: 0,
     ...theme.typography.meta,
     color: theme.colors.danger,
     marginTop: 8,
@@ -1714,13 +1740,18 @@ function createStyles(theme: AppTheme) {
     marginTop: 2,
   },
   inputGroup: {
+    width: "100%",
+    minWidth: 0,
     gap: 6,
   },
   inputLabel: {
+    minWidth: 0,
     ...theme.typography.meta,
     color: theme.colors.textMuted,
   },
   textInput: {
+    width: "100%",
+    minWidth: 0,
     minHeight: 42,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
@@ -1732,6 +1763,8 @@ function createStyles(theme: AppTheme) {
     ...theme.typography.body,
   },
   textArea: {
+    width: "100%",
+    minWidth: 0,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -1743,6 +1776,8 @@ function createStyles(theme: AppTheme) {
     ...theme.typography.body,
   },
   shortcutRow: {
+    width: "100%",
+    minWidth: 0,
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
@@ -1761,6 +1796,8 @@ function createStyles(theme: AppTheme) {
     color: theme.colors.text,
   },
   sendToolRow: {
+    width: "100%",
+    minWidth: 0,
     minHeight: 38,
     flexDirection: "row",
     alignItems: "center",
@@ -1788,6 +1825,8 @@ function createStyles(theme: AppTheme) {
     color: theme.colors.textMuted,
   },
   keyGrid: {
+    width: "100%",
+    minWidth: 0,
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
@@ -1820,45 +1859,66 @@ function createStyles(theme: AppTheme) {
   },
   modalKeyboard: {
     flex: 1,
+    width: "100%",
     justifyContent: "flex-end",
   },
   sheet: {
+    width: "100%",
+    minWidth: 0,
+    alignSelf: "stretch",
     maxHeight: "82%",
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     padding: 16,
   },
   sheetTall: {
-    minHeight: "72%",
+    height: "92%",
+    maxHeight: "94%",
   },
   sheetHeader: {
+    width: "100%",
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 12,
   },
   sheetTitle: {
+    flex: 1,
+    minWidth: 0,
     ...theme.typography.section,
     color: theme.colors.text,
   },
   sheetMeta: {
+    width: "100%",
+    minWidth: 0,
+    flexShrink: 1,
     ...theme.typography.meta,
     color: theme.colors.textMuted,
   },
   sheetBody: {
+    width: "100%",
+    minWidth: 0,
     flexShrink: 1,
     marginTop: 12,
   },
   sheetBodyTall: {
     flex: 1,
+    minHeight: 0,
   },
   sheetContent: {
+    width: "100%",
+    minWidth: 0,
     gap: 12,
     paddingBottom: 4,
   },
   sheetContentTall: {
     flexGrow: 1,
+    minHeight: 0,
   },
   responseSheetMetaRow: {
+    width: "100%",
+    minWidth: 0,
     minHeight: 38,
     flexDirection: "row",
     alignItems: "center",
@@ -1867,6 +1927,8 @@ function createStyles(theme: AppTheme) {
   },
   responseFullBox: {
     flex: 1,
+    minHeight: 0,
+    minWidth: 0,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -1874,10 +1936,13 @@ function createStyles(theme: AppTheme) {
     padding: 12,
   },
   responseFullText: {
+    minWidth: 0,
     ...theme.typography.body,
     color: theme.colors.text,
   },
   toggleRow: {
+    width: "100%",
+    minWidth: 0,
     minHeight: 36,
     flexDirection: "row",
     alignItems: "center",
@@ -1897,11 +1962,15 @@ function createStyles(theme: AppTheme) {
     borderColor: theme.colors.accent,
   },
   toggleText: {
+    flex: 1,
+    minWidth: 0,
     ...theme.typography.body,
     color: theme.colors.text,
   },
   terminalBox: {
     flex: 1,
+    minHeight: 0,
+    minWidth: 0,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -1909,11 +1978,14 @@ function createStyles(theme: AppTheme) {
     padding: 12,
   },
   terminalText: {
+    minWidth: 0,
     ...theme.typography.mono,
     color: "#edece5",
   },
   transcriptBox: {
     flex: 1,
+    minHeight: 0,
+    minWidth: 0,
   },
   turnRow: {
     borderBottomWidth: 1,
@@ -1922,19 +1994,24 @@ function createStyles(theme: AppTheme) {
     gap: 4,
   },
   turnRole: {
+    minWidth: 0,
     ...theme.typography.meta,
     color: theme.colors.accent,
   },
   turnText: {
+    minWidth: 0,
     ...theme.typography.body,
     color: theme.colors.text,
   },
   segmentRow: {
+    width: "100%",
+    minWidth: 0,
     flexDirection: "row",
     gap: 8,
   },
   segment: {
     flex: 1,
+    minWidth: 0,
     minHeight: 40,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
@@ -1948,6 +2025,7 @@ function createStyles(theme: AppTheme) {
     borderColor: theme.colors.accent,
   },
   segmentText: {
+    minWidth: 0,
     ...theme.typography.section,
     color: theme.colors.text,
   },
@@ -1955,11 +2033,15 @@ function createStyles(theme: AppTheme) {
     color: theme.colors.surfaceRaised,
   },
   twoCol: {
+    width: "100%",
+    minWidth: 0,
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 10,
   },
   twoColItem: {
     flex: 1,
+    minWidth: 132,
     gap: 6,
   },
   });
