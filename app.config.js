@@ -2,7 +2,7 @@ const variant = process.env.APP_ENV || "development";
 
 export default {
   expo: {
-    name: "A-MAX AMUX",
+    name: "AMUX",
     slug: "tmux-mobile-mobile",
     version: "0.1.0",
     runtimeVersion: "1",
@@ -19,7 +19,7 @@ export default {
       },
       infoPlist: {
         NSMicrophoneUsageDescription:
-          "Allow A-MAX AMUX to access your microphone for voice commands.",
+          "Allow AMUX to access your microphone for voice commands.",
       },
     },
     android: {
@@ -55,7 +55,7 @@ export default {
         "expo-image-picker",
         {
           photosPermission:
-            "Allow A-MAX AMUX to pick images and send them to tmux panes.",
+            "Allow AMUX to pick images and send them to tmux panes.",
         },
       ],
       [

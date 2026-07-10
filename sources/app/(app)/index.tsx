@@ -2,10 +2,12 @@ import * as React from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   AppState,
   FlatList,
   Image,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -97,7 +99,6 @@ const PROMPT_SHORTCUTS = [
 ] as const;
 
 const TERMINAL_KEYS = [
-  { label: "Ent", key: "Enter" },
   { label: "Esc", key: "Escape" },
   { label: "^C", key: "C-c", danger: true },
   { label: "^Z", key: "C-z", danger: true },
@@ -210,9 +211,9 @@ function CommandCenterScreen() {
 
   const refreshCommandCenter = React.useCallback(() => {
     setMenuVisible(false);
-    queryClient.invalidateQueries({ queryKey: commandCenterKey }).catch(() => {});
-    queryClient.invalidateQueries({ queryKey: cardStarsKey }).catch(() => {});
-  }, [queryClient]);
+    void Promise.all([commandCenter.refetch(), cardStars.refetch()]);
+    void Haptics.selectionAsync();
+  }, [cardStars, commandCenter]);
 
   const signOut = React.useCallback(() => {
     setMenuVisible(false);
@@ -304,12 +305,17 @@ function CommandCenterScreen() {
       <StatusBar style={theme.dark ? "light" : "dark"} />
       <View style={styles.header}>
         <View style={styles.headerTitleBlock}>
-          <Text style={styles.title}>A-MAX AMUX</Text>
+          <Text style={styles.title}>AMUX</Text>
           <Text style={styles.headerMeta} numberOfLines={1}>
             {auth.session.user.email || auth.baseUrl}
           </Text>
         </View>
         <View style={styles.headerButtons}>
+          <IconButton
+            label="Refresh"
+            icon={<RefreshCcw size={19} color={theme.colors.text} />}
+            onPress={refreshCommandCenter}
+          />
           <IconButton
             label="Command menu"
             icon={<MoreVertical size={19} color={theme.colors.text} />}
@@ -457,7 +463,7 @@ function LoginScreen() {
       <StatusBar style={theme.dark ? "light" : "dark"} />
       <View style={styles.loginPanel}>
         <Terminal size={34} color={theme.colors.accent} />
-        <Text style={styles.loginTitle}>A-MAX AMUX</Text>
+        <Text style={styles.loginTitle}>AMUX</Text>
         <Text style={styles.loginText}>
           Native command center for Codex and Claude sessions running through tmux-mobile.
         </Text>
@@ -834,14 +840,12 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
   const sendKey = useSendKey();
   const uploadFile = useUploadFile();
   const [text, setText] = React.useState("");
-  const [enter, setEnter] = React.useState(true);
   const [uploading, setUploading] = React.useState(false);
   const [status, setStatus] = React.useState("");
 
   React.useEffect(() => {
     if (target) {
       setText("");
-      setEnter(true);
       setStatus("");
     }
   }, [target]);
@@ -923,6 +927,16 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
     [sendKey, sendText, target],
   );
 
+  const sendCurrentText = React.useCallback(() => {
+    if (!target || sendText.isPending) return;
+    sendText.mutate(
+      { agent: target, text, enter: true },
+      {
+        onSuccess: () => onClose(),
+      },
+    );
+  }, [onClose, sendText, target, text]);
+
   return (
     <SheetModal visible={Boolean(target)} title="Send to pane" onClose={onClose}>
       <Text style={styles.sheetMeta} numberOfLines={2}>
@@ -940,6 +954,9 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
         onChangeText={setText}
         multiline
         autoFocus
+        returnKeyType="send"
+        submitBehavior="submit"
+        onSubmitEditing={sendCurrentText}
         style={[styles.textArea, { minHeight: 132 }]}
         placeholder="Type a prompt, command, or note..."
         placeholderTextColor={theme.colors.textMuted}
@@ -979,24 +996,10 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           </Pressable>
         ))}
       </View>
-      <Pressable style={styles.toggleRow} onPress={() => setEnter((value) => !value)}>
-        <View style={[styles.checkbox, enter ? styles.checkboxActive : null]}>
-          {enter ? <Check size={13} color={theme.colors.surfaceRaised} /> : null}
-        </View>
-        <Text style={styles.toggleText}>Press Enter after sending</Text>
-      </Pressable>
       <Pressable
         style={[styles.primaryButton, sendText.isPending ? styles.disabledButton : null]}
         disabled={!target || sendText.isPending}
-        onPress={() => {
-          if (!target) return;
-          sendText.mutate(
-            { agent: target, text, enter },
-            {
-              onSuccess: () => onClose(),
-            },
-          );
-        }}
+        onPress={sendCurrentText}
       >
         {sendText.isPending ? <ActivityIndicator color={theme.colors.surfaceRaised} /> : <Text style={styles.primaryButtonText}>Send</Text>}
       </Pressable>
@@ -1301,6 +1304,50 @@ function SheetModal({
   const theme = useAppTheme();
   const styles = useAppStyles();
   const insets = useSafeAreaInsets();
+  const dragY = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (visible) dragY.setValue(0);
+  }, [dragY, visible]);
+
+  const resetDrag = React.useCallback(() => {
+    Animated.spring(dragY, {
+      toValue: 0,
+      damping: 18,
+      stiffness: 180,
+      mass: 0.8,
+      useNativeDriver: true,
+    }).start();
+  }, [dragY]);
+
+  const dismissByGesture = React.useCallback(() => {
+    Animated.timing(dragY, {
+      toValue: 520,
+      duration: 150,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      dragY.setValue(0);
+      if (finished) onClose();
+    });
+  }, [dragY, onClose]);
+
+  const panResponder = React.useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gestureState) =>
+          gestureState.dy > 6 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.2,
+        onPanResponderMove: (_event, gestureState) => {
+          dragY.setValue(Math.max(0, gestureState.dy));
+        },
+        onPanResponderRelease: (_event, gestureState) => {
+          if (gestureState.dy > 92 || gestureState.vy > 1.05) dismissByGesture();
+          else resetDrag();
+        },
+        onPanResponderTerminate: resetDrag,
+      }),
+    [dismissByGesture, dragY, resetDrag],
+  );
+
   const body = tall ? (
     <View style={[styles.sheetBody, styles.sheetBodyTall, styles.sheetContent, styles.sheetContentTall]}>
       {children}
@@ -1327,14 +1374,28 @@ function SheetModal({
           automaticOffset
           style={styles.modalKeyboard}
         >
-          <View
+          <Animated.View
             style={[
               styles.sheet,
               tall ? styles.sheetTall : null,
               { paddingBottom: insets.bottom + 16, backgroundColor: theme.colors.surface },
+              {
+                transform: [
+                  {
+                    translateY: dragY.interpolate({
+                      inputRange: [0, 520],
+                      outputRange: [0, 520],
+                      extrapolate: "clamp",
+                    }),
+                  },
+                ],
+              },
             ]}
           >
-            <View style={styles.sheetHeader}>
+            <View style={styles.sheetDragArea} {...panResponder.panHandlers}>
+              <View style={styles.sheetGrabber} />
+            </View>
+            <View style={styles.sheetHeader} {...panResponder.panHandlers}>
               <Text style={styles.sheetTitle} numberOfLines={1}>
                 {title}
               </Text>
@@ -1343,7 +1404,7 @@ function SheetModal({
               </Pressable>
             </View>
             {body}
-          </View>
+          </Animated.View>
         </KeyboardAvoidingView>
       </View>
     </Modal>
@@ -1897,6 +1958,21 @@ function createStyles(theme: AppTheme) {
     height: "92%",
     maxHeight: "94%",
   },
+  sheetDragArea: {
+    width: "100%",
+    minWidth: 0,
+    height: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: -6,
+    marginBottom: 2,
+  },
+  sheetGrabber: {
+    width: 42,
+    height: 4,
+    borderRadius: theme.radii.full,
+    backgroundColor: theme.colors.border,
+  },
   sheetHeader: {
     width: "100%",
     minWidth: 0,
@@ -1958,33 +2034,6 @@ function createStyles(theme: AppTheme) {
     padding: 12,
   },
   responseFullText: {
-    minWidth: 0,
-    ...theme.typography.body,
-    color: theme.colors.text,
-  },
-  toggleRow: {
-    width: "100%",
-    minWidth: 0,
-    minHeight: 36,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  checkbox: {
-    width: 20,
-    height: 20,
-    borderRadius: theme.radii.sm,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  checkboxActive: {
-    backgroundColor: theme.colors.accent,
-    borderColor: theme.colors.accent,
-  },
-  toggleText: {
-    flex: 1,
     minWidth: 0,
     ...theme.typography.body,
     color: theme.colors.text,
