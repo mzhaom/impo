@@ -1,4 +1,6 @@
 import Constants from "expo-constants";
+import { EncodingType, readAsStringAsync } from "expo-file-system/legacy";
+import { toByteArray } from "base64-js";
 import type {
   AgentTranscriptResponse,
   CardStarsResponse,
@@ -17,6 +19,13 @@ export interface UploadFileInput {
 export interface UploadFileResponse {
   path?: string;
   name?: string;
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const bytes = toByteArray(base64);
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
 }
 
 export class ApiError extends Error {
@@ -196,8 +205,7 @@ export class TmuxMobileApi {
     paneId: string,
     file: UploadFileInput,
   ): Promise<UploadFileResponse> {
-    const response = await fetch(file.uri);
-    const blob = await response.blob();
+    const base64 = await readAsStringAsync(file.uri, { encoding: EncodingType.Base64 });
     const params = new URLSearchParams({
       paneId,
       name: file.name || "upload",
@@ -206,9 +214,9 @@ export class TmuxMobileApi {
       method: "POST",
       machineId,
       headers: {
-        "content-type": file.type || blob.type || "application/octet-stream",
+        "content-type": file.type || "application/octet-stream",
       },
-      body: blob,
+      body: base64ToArrayBuffer(base64),
     });
   }
 

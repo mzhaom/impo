@@ -2,12 +2,10 @@ import * as React from "react";
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   AppState,
   FlatList,
   Image,
   Modal,
-  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -23,7 +21,15 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { StatusBar } from "expo-status-bar";
+import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardAvoidingView, KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { darkTheme, lightTheme } from "@/theme";
 import type { AppTheme } from "@/theme";
@@ -1304,49 +1310,57 @@ function SheetModal({
   const theme = useAppTheme();
   const styles = useAppStyles();
   const insets = useSafeAreaInsets();
-  const dragY = React.useRef(new Animated.Value(0)).current;
+  const dragY = useSharedValue(0);
 
   React.useEffect(() => {
-    if (visible) dragY.setValue(0);
+    if (visible) dragY.value = 0;
   }, [dragY, visible]);
 
-  const resetDrag = React.useCallback(() => {
-    Animated.spring(dragY, {
-      toValue: 0,
-      damping: 18,
-      stiffness: 180,
-      mass: 0.8,
-      useNativeDriver: true,
-    }).start();
-  }, [dragY]);
+  const sheetGestureStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: Math.max(0, dragY.value) }],
+  }));
 
-  const dismissByGesture = React.useCallback(() => {
-    Animated.timing(dragY, {
-      toValue: 520,
-      duration: 150,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      dragY.setValue(0);
-      if (finished) onClose();
+  const dismissGesture = React.useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetY(8)
+        .failOffsetX([-24, 24])
+        .onUpdate((event) => {
+          dragY.value = Math.max(0, event.translationY);
+        })
+        .onEnd((event) => {
+          const shouldDismiss = event.translationY > 86 || event.velocityY > 760;
+          if (shouldDismiss) {
+            dragY.value = withTiming(620, { duration: 150 }, (finished) => {
+              dragY.value = 0;
+              if (finished) runOnJS(onClose)();
+            });
+            return;
+          }
+          dragY.value = withSpring(0, {
+            damping: 18,
+            stiffness: 190,
+            mass: 0.8,
+          });
+        })
+        .onFinalize(() => {
+          if (dragY.value > 0 && dragY.value < 620) {
+            dragY.value = withSpring(0, {
+              damping: 18,
+              stiffness: 190,
+              mass: 0.8,
+            });
+          }
+        }),
+    [dragY, onClose],
+  );
+
+  const closeSheet = React.useCallback(() => {
+    dragY.value = withTiming(620, { duration: 140 }, (finished) => {
+      dragY.value = 0;
+      if (finished) runOnJS(onClose)();
     });
   }, [dragY, onClose]);
-
-  const panResponder = React.useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: (_event, gestureState) =>
-          gestureState.dy > 6 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.2,
-        onPanResponderMove: (_event, gestureState) => {
-          dragY.setValue(Math.max(0, gestureState.dy));
-        },
-        onPanResponderRelease: (_event, gestureState) => {
-          if (gestureState.dy > 92 || gestureState.vy > 1.05) dismissByGesture();
-          else resetDrag();
-        },
-        onPanResponderTerminate: resetDrag,
-      }),
-    [dismissByGesture, dragY, resetDrag],
-  );
 
   const body = tall ? (
     <View style={[styles.sheetBody, styles.sheetBodyTall, styles.sheetContent, styles.sheetContentTall]}>
@@ -1368,45 +1382,41 @@ function SheetModal({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          automaticOffset
-          style={styles.modalKeyboard}
-        >
-          <Animated.View
-            style={[
-              styles.sheet,
-              tall ? styles.sheetTall : null,
-              { paddingBottom: insets.bottom + 16, backgroundColor: theme.colors.surface },
-              {
-                transform: [
-                  {
-                    translateY: dragY.interpolate({
-                      inputRange: [0, 520],
-                      outputRange: [0, 520],
-                      extrapolate: "clamp",
-                    }),
-                  },
-                ],
-              },
-            ]}
+      <GestureHandlerRootView style={styles.modalRoot}>
+        <View style={styles.modalBackdrop}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            automaticOffset
+            style={styles.modalKeyboard}
           >
-            <View style={styles.sheetDragArea} {...panResponder.panHandlers}>
-              <View style={styles.sheetGrabber} />
-            </View>
-            <View style={styles.sheetHeader} {...panResponder.panHandlers}>
-              <Text style={styles.sheetTitle} numberOfLines={1}>
-                {title}
-              </Text>
-              <Pressable style={styles.iconButton} onPress={onClose}>
-                <X size={18} color={theme.colors.text} />
-              </Pressable>
-            </View>
-            {body}
-          </Animated.View>
-        </KeyboardAvoidingView>
-      </View>
+            <Animated.View
+              style={[
+                styles.sheet,
+                tall ? styles.sheetTall : null,
+                { paddingBottom: insets.bottom + 16, backgroundColor: theme.colors.surface },
+                sheetGestureStyle,
+              ]}
+            >
+              <GestureDetector gesture={dismissGesture}>
+                <View style={styles.sheetGestureZone}>
+                  <View style={styles.sheetDragArea}>
+                    <View style={styles.sheetGrabber} />
+                  </View>
+                  <View style={styles.sheetHeader}>
+                    <Text style={styles.sheetTitle} numberOfLines={1}>
+                      {title}
+                    </Text>
+                    <Pressable style={styles.iconButton} onPress={closeSheet}>
+                      <X size={18} color={theme.colors.text} />
+                    </Pressable>
+                  </View>
+                </View>
+              </GestureDetector>
+              {body}
+            </Animated.View>
+          </KeyboardAvoidingView>
+        </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -1940,6 +1950,9 @@ function createStyles(theme: AppTheme) {
     justifyContent: "flex-end",
     backgroundColor: "rgba(0, 0, 0, 0.36)",
   },
+  modalRoot: {
+    flex: 1,
+  },
   modalKeyboard: {
     flex: 1,
     width: "100%",
@@ -1957,6 +1970,10 @@ function createStyles(theme: AppTheme) {
   sheetTall: {
     height: "92%",
     maxHeight: "94%",
+  },
+  sheetGestureZone: {
+    width: "100%",
+    minWidth: 0,
   },
   sheetDragArea: {
     width: "100%",
