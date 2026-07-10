@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentMachineKey } from "./types";
-import type { AgentSession, CardStarsResponse } from "./types";
+import type { AgentSession, CardStarsResponse, PinsResponse } from "./types";
 import type { UploadFileInput } from "./api";
 import { useTmuxMobileApi } from "./auth";
 
 export const commandCenterKey = ["command-center"] as const;
 export const cardStarsKey = ["card-stars"] as const;
+export const pinsKey = ["pins"] as const;
 
 export function useCommandCenter() {
   const api = useTmuxMobileApi();
@@ -27,6 +28,18 @@ export function useCardStars() {
     queryFn: async () => {
       if (!api) throw new Error("Not signed in");
       return api.cardStars();
+    },
+  });
+}
+
+export function usePins(enabled = true) {
+  const api = useTmuxMobileApi();
+  return useQuery({
+    queryKey: pinsKey,
+    enabled: Boolean(api) && enabled,
+    queryFn: async () => {
+      if (!api) throw new Error("Not signed in");
+      return api.pins();
     },
   });
 }
@@ -130,6 +143,68 @@ export function useUploadFile() {
       if (!api) throw new Error("Not signed in");
       if (!agent.paneId) throw new Error("No pane target");
       return api.uploadFile(agentMachineKey(agent), agent.paneId, file);
+    },
+  });
+}
+
+export function usePinInlineArtifact() {
+  const api = useTmuxMobileApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      agent: AgentSession;
+      text: string;
+      name: string;
+      sourcePath: string;
+    }) => {
+      if (!api) throw new Error("Not signed in");
+      return api.pinInlineArtifact({
+        machineId: agentMachineKey(input.agent),
+        text: input.text,
+        name: input.name,
+        sourcePath: input.sourcePath,
+      });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: pinsKey });
+    },
+  });
+}
+
+export function useRenamePin() {
+  const api = useTmuxMobileApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      if (!api) throw new Error("Not signed in");
+      return api.renamePin(id, name);
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData<PinsResponse | undefined>(pinsKey, (current) => {
+        if (!current) return current;
+        return {
+          pins: current.pins.map((pin) => (pin.id === data.pin.id ? data.pin : pin)),
+        };
+      });
+      void queryClient.invalidateQueries({ queryKey: pinsKey });
+    },
+  });
+}
+
+export function useDeletePin() {
+  const api = useTmuxMobileApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id }: { id: string }) => {
+      if (!api) throw new Error("Not signed in");
+      return api.deletePin(id);
+    },
+    onSuccess: (_data, input) => {
+      queryClient.setQueryData<PinsResponse | undefined>(pinsKey, (current) => {
+        if (!current) return current;
+        return { pins: current.pins.filter((pin) => pin.id !== input.id) };
+      });
+      void queryClient.invalidateQueries({ queryKey: pinsKey });
     },
   });
 }

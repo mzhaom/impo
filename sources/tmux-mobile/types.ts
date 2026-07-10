@@ -79,7 +79,9 @@ export interface AgentSession {
   agentSessionId?: string;
   transcriptPath?: string;
   lastUserText?: string;
+  lastUserAt?: string | null;
   lastAssistantText?: string;
+  lastAssistantAt?: string | null;
   lastRole?: string;
   turn?: string;
   turnConfidence?: string;
@@ -93,6 +95,32 @@ export interface AgentSession {
 export interface CardStarsResponse {
   keys: string[];
   customized?: boolean;
+}
+
+export interface ArtifactPin {
+  id: string;
+  name?: string;
+  version?: number;
+  size?: number;
+  createdAt?: number;
+  shareUrl: string;
+  share?: {
+    scope?: "private" | "users" | "org" | "all" | string;
+  };
+  owned?: boolean;
+  ownerEmail?: string;
+  preview?: string;
+  sourcePath?: string;
+}
+
+export interface PinsResponse {
+  pins: ArtifactPin[];
+}
+
+export interface PinArtifactResponse {
+  pin: ArtifactPin;
+  deduped?: boolean;
+  persisted?: boolean;
 }
 
 export interface CommandCenterResponse {

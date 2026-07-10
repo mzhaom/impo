@@ -3,10 +3,12 @@ import { EncodingType, readAsStringAsync } from "expo-file-system/legacy";
 import { toByteArray } from "base64-js";
 import type {
   AgentTranscriptResponse,
+  PinArtifactResponse,
   CardStarsResponse,
   CommandCenterResponse,
   DeviceLoginResult,
   DeviceLoginStart,
+  PinsResponse,
   WindowViewResponse,
 } from "./types";
 
@@ -165,6 +167,41 @@ export class TmuxMobileApi {
     return this.request("/api/card-stars", {
       method: "PUT",
       body: { keys },
+    });
+  }
+
+  pins(): Promise<PinsResponse> {
+    return this.request("/api/pins");
+  }
+
+  pinInlineArtifact(input: {
+    machineId?: string;
+    text: string;
+    name: string;
+    sourcePath: string;
+  }): Promise<PinArtifactResponse> {
+    return this.request("/api/pins?inline=1", {
+      method: "POST",
+      machineId: input.machineId,
+      body: {
+        machineId: input.machineId,
+        text: input.text,
+        name: input.name,
+        sourcePath: input.sourcePath,
+      },
+    });
+  }
+
+  renamePin(id: string, name: string): Promise<PinArtifactResponse> {
+    return this.request(`/api/pins?id=${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: { name },
+    });
+  }
+
+  deletePin(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/api/pins?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
     });
   }
 
