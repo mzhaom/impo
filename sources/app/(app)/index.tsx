@@ -5,7 +5,6 @@ import {
   AppState,
   FlatList,
   Image,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -22,6 +21,7 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { StatusBar } from "expo-status-bar";
+import { KeyboardAvoidingView, KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { darkTheme, lightTheme } from "@/theme";
 import type { AppTheme } from "@/theme";
@@ -1286,8 +1286,8 @@ function SheetModal({
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          automaticOffset
           style={styles.modalKeyboard}
         >
           <View
@@ -1303,7 +1303,17 @@ function SheetModal({
                 <X size={18} color={theme.colors.text} />
               </Pressable>
             </View>
-            {children}
+            <KeyboardAwareScrollView
+              style={[styles.sheetBody, tall ? styles.sheetBodyTall : null]}
+              contentContainerStyle={[styles.sheetContent, tall ? styles.sheetContentTall : null]}
+              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+              keyboardShouldPersistTaps="handled"
+              bottomOffset={insets.bottom + 24}
+              extraKeyboardSpace={12}
+              showsVerticalScrollIndicator={false}
+            >
+              {children}
+            </KeyboardAwareScrollView>
           </View>
         </KeyboardAvoidingView>
       </View>
@@ -1817,7 +1827,6 @@ function createStyles(theme: AppTheme) {
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     padding: 16,
-    gap: 12,
   },
   sheetTall: {
     minHeight: "72%",
@@ -1834,6 +1843,20 @@ function createStyles(theme: AppTheme) {
   sheetMeta: {
     ...theme.typography.meta,
     color: theme.colors.textMuted,
+  },
+  sheetBody: {
+    flexShrink: 1,
+    marginTop: 12,
+  },
+  sheetBodyTall: {
+    flex: 1,
+  },
+  sheetContent: {
+    gap: 12,
+    paddingBottom: 4,
+  },
+  sheetContentTall: {
+    flexGrow: 1,
   },
   responseSheetMetaRow: {
     minHeight: 38,
