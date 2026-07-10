@@ -258,6 +258,7 @@ type AgentFileTarget = {
 type MarkdownPathRuleOptions = {
   agent?: AgentSession | null;
   basePath?: string;
+  selectable?: boolean;
 };
 
 const SHEET_DRAG_ZONE_HEIGHT = 92;
@@ -403,7 +404,52 @@ function createMarkdownPathRules(
   onOpenPath: (path: string) => void,
   options: MarkdownPathRuleOptions = {},
 ): RenderRules {
+  const selectable = options.selectable === true;
+  const trimCodeContent = (value: string) =>
+    value.endsWith("\n") ? value.slice(0, -1) : value;
   return {
+    strong: (node, children, _parentNodes, styles) => (
+      <Text key={node.key} selectable={selectable} style={styles.strong}>
+        {children}
+      </Text>
+    ),
+    em: (node, children, _parentNodes, styles) => (
+      <Text key={node.key} selectable={selectable} style={styles.em}>
+        {children}
+      </Text>
+    ),
+    s: (node, children, _parentNodes, styles) => (
+      <Text key={node.key} selectable={selectable} style={styles.s}>
+        {children}
+      </Text>
+    ),
+    code_inline: (node, _children, _parentNodes, styles, inheritedStyles = {}) => (
+      <Text key={node.key} selectable={selectable} style={[inheritedStyles, styles.code_inline]}>
+        {node.content}
+      </Text>
+    ),
+    code_block: (node, _children, _parentNodes, styles, inheritedStyles = {}) => (
+      <Text key={node.key} selectable={selectable} style={[inheritedStyles, styles.code_block]}>
+        {trimCodeContent(String(node.content || ""))}
+      </Text>
+    ),
+    fence: (node, _children, _parentNodes, styles, inheritedStyles = {}) => (
+      <Text key={node.key} selectable={selectable} style={[inheritedStyles, styles.fence]}>
+        {trimCodeContent(String(node.content || ""))}
+      </Text>
+    ),
+    link: (node, children, _parentNodes, styles, onLinkPress) => (
+      <Text
+        key={node.key}
+        selectable={selectable}
+        style={styles.link}
+        onPress={() => {
+          onLinkPress?.(String(node.attributes?.href || ""));
+        }}
+      >
+        {children}
+      </Text>
+    ),
     text: (node, _children, parentNodes, styles, inheritedStyles = {}) => {
       const content = String(node.content || "");
       const insideLink = parentNodes.some((parent) => parent?.type === "link" || parent?.type === "blocklink");
@@ -411,13 +457,13 @@ function createMarkdownPathRules(
       const hasFile = parts.some((part) => part.kind === "file");
       if (!hasFile) {
         return (
-          <Text key={node.key} style={[inheritedStyles, styles.text]}>
+          <Text key={node.key} selectable={selectable} style={[inheritedStyles, styles.text]}>
             {content}
           </Text>
         );
       }
       return (
-        <Text key={node.key} style={[inheritedStyles, styles.text]}>
+        <Text key={node.key} selectable={selectable} style={[inheritedStyles, styles.text]}>
           {parts.map((part, index) =>
             part.kind === "file" ? (
               <Text
@@ -435,6 +481,31 @@ function createMarkdownPathRules(
         </Text>
       );
     },
+    textgroup: (node, children, _parentNodes, styles) => (
+      <Text key={node.key} selectable={selectable} style={styles.textgroup}>
+        {children}
+      </Text>
+    ),
+    hardbreak: (node, _children, _parentNodes, styles) => (
+      <Text key={node.key} selectable={selectable} style={styles.hardbreak}>
+        {"\n"}
+      </Text>
+    ),
+    softbreak: (node, _children, _parentNodes, styles) => (
+      <Text key={node.key} selectable={selectable} style={styles.softbreak}>
+        {"\n"}
+      </Text>
+    ),
+    inline: (node, children, _parentNodes, styles) => (
+      <Text key={node.key} selectable={selectable} style={styles.inline}>
+        {children}
+      </Text>
+    ),
+    span: (node, children, _parentNodes, styles) => (
+      <Text key={node.key} selectable={selectable} style={styles.span}>
+        {children}
+      </Text>
+    ),
     image: (node) => {
       const src = String(node.attributes?.src || "");
       const alt = String(node.attributes?.alt || "");
@@ -1034,11 +1105,13 @@ function LinkedPathText({
   text,
   style,
   numberOfLines,
+  selectable,
   onOpenPath,
 }: {
   text: string;
   style?: StyleProp<TextStyle>;
   numberOfLines?: number;
+  selectable?: boolean;
   onOpenPath: (path: string) => void;
 }) {
   const styles = useAppStyles();
@@ -1046,13 +1119,13 @@ function LinkedPathText({
   const hasFile = parts.some((part) => part.kind === "file");
   if (!hasFile) {
     return (
-      <Text style={style} numberOfLines={numberOfLines}>
+      <Text selectable={selectable} style={style} numberOfLines={numberOfLines}>
         {text}
       </Text>
     );
   }
   return (
-    <Text style={style} numberOfLines={numberOfLines}>
+    <Text selectable={selectable} style={style} numberOfLines={numberOfLines}>
       {parts.map((part, index) =>
         part.kind === "file" ? (
           <Text
@@ -2550,7 +2623,7 @@ function ResponseModal({
     [onOpenFile, target],
   );
   const markdownRules = React.useMemo(
-    () => createMarkdownPathRules(openAgentFile, { agent: target }),
+    () => createMarkdownPathRules(openAgentFile, { agent: target, selectable: true }),
     [openAgentFile, target],
   );
   const handleMarkdownLinkPress = React.useCallback(
@@ -2672,7 +2745,7 @@ function FilePreviewModal({
       createMarkdownPathRules((path) => {
         setStatus("");
         onOpenPath(path);
-      }, { agent: target?.agent || null, basePath: target?.path || "" }),
+      }, { agent: target?.agent || null, basePath: target?.path || "", selectable: true }),
     [onOpenPath, target],
   );
   const handleMarkdownLinkPress = React.useCallback(
@@ -2831,7 +2904,7 @@ function FilePreviewModal({
               {textContent || "(empty file)"}
             </Markdown>
           ) : (
-            <Text style={styles.terminalText}>{textContent || "(empty file)"}</Text>
+            <Text selectable style={styles.terminalText}>{textContent || "(empty file)"}</Text>
           )}
         </ScrollView>
       ) : !loading && !error ? (
@@ -2869,7 +2942,7 @@ function TranscriptModal({
     [onOpenFile, target],
   );
   const markdownRules = React.useMemo(
-    () => createMarkdownPathRules(openTranscriptFile, { agent: target }),
+    () => createMarkdownPathRules(openTranscriptFile, { agent: target, selectable: true }),
     [openTranscriptFile, target],
   );
   const handleMarkdownLinkPress = React.useCallback(
@@ -2929,6 +3002,7 @@ function TranscriptModal({
               <LinkedPathText
                 text={turn.text || ""}
                 style={styles.turnText}
+                selectable
                 onOpenPath={openTranscriptFile}
               />
             )}
