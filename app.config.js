@@ -13,6 +13,7 @@ export default {
     ios: {
       supportsTablet: true,
       bundleIdentifier: "ai.impo.tmuxmobile",
+      appleTeamId: "BN3369Y53F",
       config: {
         usesNonExemptEncryption: false,
       },
