@@ -3,9 +3,11 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  Animated,
   FlatList,
   Image,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -20,16 +22,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { StatusBar } from "expo-status-bar";
-import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardAvoidingView, KeyboardAwareScrollView } from "react-native-keyboard-controller";
-import Animated, {
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-  withTiming,
-} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { darkTheme, lightTheme } from "@/theme";
 import type { AppTheme } from "@/theme";
@@ -43,6 +38,8 @@ import {
   LogOut,
   Maximize2,
   MessageSquareText,
+  Mic,
+  MicOff,
   MoreVertical,
   Moon,
   Play,
@@ -847,7 +844,9 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
   const uploadFile = useUploadFile();
   const [text, setText] = React.useState("");
   const [uploading, setUploading] = React.useState(false);
+  const [recognizing, setRecognizing] = React.useState(false);
   const [status, setStatus] = React.useState("");
+  const voiceResultRef = React.useRef("");
 
   React.useEffect(() => {
     if (target) {
@@ -862,6 +861,56 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
       return /\s$/.test(current) ? `${current}${value}` : `${current} ${value}`;
     });
   }, []);
+
+  useSpeechRecognitionEvent("start", () => {
+    setRecognizing(true);
+    setStatus("Listening...");
+  });
+
+  useSpeechRecognitionEvent("end", () => {
+    setRecognizing(false);
+  });
+
+  useSpeechRecognitionEvent("result", (event) => {
+    if (!event.isFinal) return;
+    const transcript = event.results[0]?.transcript.trim();
+    if (!transcript || transcript === voiceResultRef.current) return;
+    voiceResultRef.current = transcript;
+    appendText(transcript);
+    setStatus("Voice added");
+    void Haptics.selectionAsync();
+  });
+
+  useSpeechRecognitionEvent("error", (event) => {
+    setRecognizing(false);
+    setStatus(event.message || `Voice input failed: ${event.error}`);
+  });
+
+  const toggleVoiceInput = React.useCallback(async () => {
+    if (recognizing) {
+      ExpoSpeechRecognitionModule.stop();
+      return;
+    }
+    setStatus("");
+    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+      setStatus("Voice input is not available on this device");
+      return;
+    }
+    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!permission.granted) {
+      setStatus("Voice permission denied");
+      return;
+    }
+    voiceResultRef.current = "";
+    ExpoSpeechRecognitionModule.start({
+      lang: "zh-CN",
+      interimResults: false,
+      maxAlternatives: 1,
+      continuous: false,
+      addsPunctuation: true,
+      contextualStrings: ["AMUX", "Codex", "Claude", "tmux", "terminal", "session", "agent"],
+    });
+  }, [recognizing]);
 
   const pickImage = React.useCallback(async () => {
     if (!target) return;
@@ -968,6 +1017,25 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
         placeholderTextColor={theme.colors.textMuted}
       />
       <View style={styles.sendToolRow}>
+        <Pressable
+          style={[styles.toolButton, recognizing ? styles.toolButtonActive : null]}
+          disabled={!target}
+          onPress={() => {
+            toggleVoiceInput().catch((error) => {
+              setRecognizing(false);
+              setStatus(error instanceof Error ? error.message : String(error));
+            });
+          }}
+        >
+          {recognizing ? (
+            <MicOff size={16} color={theme.colors.accent} />
+          ) : (
+            <Mic size={16} color={theme.colors.text} />
+          )}
+          <Text style={[styles.toolButtonText, recognizing ? styles.toolButtonTextActive : null]}>
+            {recognizing ? "Stop" : "Voice"}
+          </Text>
+        </Pressable>
         <Pressable
           style={[styles.toolButton, uploading ? styles.disabledButton : null]}
           disabled={uploading || !target}
@@ -1310,57 +1378,66 @@ function SheetModal({
   const theme = useAppTheme();
   const styles = useAppStyles();
   const insets = useSafeAreaInsets();
-  const dragY = useSharedValue(0);
+  const dragY = React.useRef(new Animated.Value(0)).current;
 
   React.useEffect(() => {
-    if (visible) dragY.value = 0;
+    if (visible) dragY.setValue(0);
   }, [dragY, visible]);
 
-  const sheetGestureStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: Math.max(0, dragY.value) }],
-  }));
-
-  const dismissGesture = React.useMemo(
-    () =>
-      Gesture.Pan()
-        .activeOffsetY(8)
-        .failOffsetX([-24, 24])
-        .onUpdate((event) => {
-          dragY.value = Math.max(0, event.translationY);
-        })
-        .onEnd((event) => {
-          const shouldDismiss = event.translationY > 86 || event.velocityY > 760;
-          if (shouldDismiss) {
-            dragY.value = withTiming(620, { duration: 150 }, (finished) => {
-              dragY.value = 0;
-              if (finished) runOnJS(onClose)();
-            });
-            return;
-          }
-          dragY.value = withSpring(0, {
-            damping: 18,
-            stiffness: 190,
-            mass: 0.8,
-          });
-        })
-        .onFinalize(() => {
-          if (dragY.value > 0 && dragY.value < 620) {
-            dragY.value = withSpring(0, {
-              damping: 18,
-              stiffness: 190,
-              mass: 0.8,
-            });
-          }
-        }),
-    [dragY, onClose],
+  const sheetGestureStyle = React.useMemo(
+    () => ({
+      transform: [
+        {
+          translateY: dragY.interpolate({
+            inputRange: [0, 620],
+            outputRange: [0, 620],
+            extrapolate: "clamp",
+          }),
+        },
+      ],
+    }),
+    [dragY],
   );
 
   const closeSheet = React.useCallback(() => {
-    dragY.value = withTiming(620, { duration: 140 }, (finished) => {
-      dragY.value = 0;
-      if (finished) runOnJS(onClose)();
-    });
+    dragY.stopAnimation();
+    dragY.setValue(0);
+    onClose();
   }, [dragY, onClose]);
+
+  const resetDrag = React.useCallback(() => {
+    Animated.spring(dragY, {
+      toValue: 0,
+      damping: 18,
+      stiffness: 190,
+      mass: 0.8,
+      useNativeDriver: true,
+    }).start();
+  }, [dragY]);
+
+  const panResponder = React.useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gestureState) =>
+          gestureState.dy > 8 && Math.abs(gestureState.dx) < 24,
+        onPanResponderGrant: () => {
+          dragY.stopAnimation();
+        },
+        onPanResponderMove: (_event, gestureState) => {
+          dragY.setValue(Math.max(0, gestureState.dy));
+        },
+        onPanResponderRelease: (_event, gestureState) => {
+          const shouldDismiss = gestureState.dy > 86 || gestureState.vy > 0.76;
+          if (shouldDismiss) {
+            closeSheet();
+            return;
+          }
+          resetDrag();
+        },
+        onPanResponderTerminate: resetDrag,
+      }),
+    [closeSheet, dragY, resetDrag],
+  );
 
   const body = tall ? (
     <View style={[styles.sheetBody, styles.sheetBodyTall, styles.sheetContent, styles.sheetContentTall]}>
@@ -1381,8 +1458,8 @@ function SheetModal({
   );
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <GestureHandlerRootView style={styles.modalRoot}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={closeSheet}>
+      <View style={styles.modalRoot}>
         <View style={styles.modalBackdrop}>
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -1397,26 +1474,24 @@ function SheetModal({
                 sheetGestureStyle,
               ]}
             >
-              <GestureDetector gesture={dismissGesture}>
-                <View style={styles.sheetGestureZone}>
-                  <View style={styles.sheetDragArea}>
-                    <View style={styles.sheetGrabber} />
-                  </View>
-                  <View style={styles.sheetHeader}>
-                    <Text style={styles.sheetTitle} numberOfLines={1}>
-                      {title}
-                    </Text>
-                    <Pressable style={styles.iconButton} onPress={closeSheet}>
-                      <X size={18} color={theme.colors.text} />
-                    </Pressable>
-                  </View>
+              <View style={styles.sheetGestureZone} {...panResponder.panHandlers}>
+                <View style={styles.sheetDragArea}>
+                  <View style={styles.sheetGrabber} />
                 </View>
-              </GestureDetector>
+                <View style={styles.sheetHeader}>
+                  <Text style={styles.sheetTitle} numberOfLines={1}>
+                    {title}
+                  </Text>
+                  <Pressable style={styles.iconButton} onPress={closeSheet}>
+                    <X size={18} color={theme.colors.text} />
+                  </Pressable>
+                </View>
+              </View>
               {body}
             </Animated.View>
           </KeyboardAvoidingView>
         </View>
-      </GestureHandlerRootView>
+      </View>
     </Modal>
   );
 }
@@ -1907,9 +1982,16 @@ function createStyles(theme: AppTheme) {
     alignItems: "center",
     gap: 8,
   },
+  toolButtonActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
   toolButtonText: {
     ...theme.typography.meta,
     color: theme.colors.text,
+  },
+  toolButtonTextActive: {
+    color: theme.colors.accent,
   },
   sendStatus: {
     flex: 1,

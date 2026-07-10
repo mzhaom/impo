@@ -20,6 +20,8 @@ export default {
       infoPlist: {
         NSMicrophoneUsageDescription:
           "Allow AMUX to access your microphone for voice commands.",
+        NSSpeechRecognitionUsageDescription:
+          "Allow AMUX to transcribe your voice into prompts.",
       },
     },
     android: {
@@ -49,6 +51,15 @@ export default {
       "expo-secure-store",
       "expo-font",
       "expo-web-browser",
+      [
+        "expo-speech-recognition",
+        {
+          microphonePermission:
+            "Allow AMUX to access your microphone for voice commands.",
+          speechRecognitionPermission:
+            "Allow AMUX to transcribe your voice into prompts.",
+        },
+      ],
       "expo-system-ui",
       "expo-status-bar",
       [
