@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   ActivityIndicator,
+  Alert,
   AppState,
   FlatList,
   Image,
@@ -14,26 +15,35 @@ import {
   TextInput,
   View,
   StyleSheet,
+  useColorScheme,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
+import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { lightTheme as theme } from "@/theme";
+import { darkTheme, lightTheme } from "@/theme";
+import type { AppTheme } from "@/theme";
 import {
   Check,
   Copy,
   Edit3,
   Eye,
+  ImagePlus,
   Laptop,
   LogOut,
   Maximize2,
   MessageSquareText,
   MoreVertical,
+  Moon,
   Play,
   RefreshCcw,
   Send,
   Star,
+  Sun,
   Terminal,
+  Trash2,
   X,
 } from "lucide-react-native";
 import { useQueryClient } from "@tanstack/react-query";
@@ -44,10 +54,13 @@ import {
   commandCenterKey,
   useCardStars,
   useCommandCenter,
+  useDeleteWindow,
   useRenameWindow,
+  useSendKey,
   useSendText,
   useStartAgent,
   useToggleCardStar,
+  useUploadFile,
 } from "@/tmux-mobile/hooks";
 import {
   agentCardKey,
@@ -70,6 +83,39 @@ const AGENT_ICONS: Record<string, number> = {
 
 const EMPTY_MACHINES: Machine[] = [];
 const EMPTY_AGENTS: AgentSession[] = [];
+const THEME_MODE_KEY = "tmux-mobile.theme-mode";
+type ThemeMode = "light" | "dark";
+type AppStyles = ReturnType<typeof createStyles>;
+
+const ThemeContext = React.createContext<AppTheme>(lightTheme);
+const StylesContext = React.createContext<AppStyles>(createStyles(lightTheme));
+
+const PROMPT_SHORTCUTS = [
+  { label: "Yes", text: "yes" },
+  { label: "Slash", text: "/" },
+  { label: "Clear", text: "/clear" },
+] as const;
+
+const TERMINAL_KEYS = [
+  { label: "Ent", key: "Enter" },
+  { label: "Esc", key: "Escape" },
+  { label: "^C", key: "C-c", danger: true },
+  { label: "^Z", key: "C-z", danger: true },
+  { label: "fg", command: "fg" },
+  { label: "Tab", key: "Tab" },
+  { label: "↑", key: "Up" },
+  { label: "⌫", key: "BSpace" },
+  { label: "⌫line", key: "C-u" },
+  { label: "↓", key: "Down" },
+] as const;
+
+function useAppTheme() {
+  return React.useContext(ThemeContext);
+}
+
+function useAppStyles() {
+  return React.useContext(StylesContext);
+}
 
 function activityTime(agent: AgentSession): number {
   const value = Date.parse(String(agent.lastActivityAt || ""));
@@ -86,11 +132,16 @@ export default function CommandCenterRoute() {
 
 function CommandCenterScreen() {
   const insets = useSafeAreaInsets();
+  const systemScheme = useColorScheme();
   const auth = useTmuxMobileAuth();
   const queryClient = useQueryClient();
   const commandCenter = useCommandCenter();
   const cardStars = useCardStars();
   const toggleCardStar = useToggleCardStar();
+  const deleteWindow = useDeleteWindow();
+  const [themeMode, setThemeMode] = React.useState<ThemeMode>(
+    systemScheme === "dark" ? "dark" : "light",
+  );
   const [machineFilter, setMachineFilter] = React.useState("all");
   const [sendTarget, setSendTarget] = React.useState<AgentSession | null>(null);
   const [renameTarget, setRenameTarget] = React.useState<AgentSession | null>(null);
@@ -103,6 +154,20 @@ function CommandCenterScreen() {
   const appState = React.useRef(AppState.currentState);
   const copyResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copiedResponseKey, setCopiedResponseKey] = React.useState("");
+  const theme = themeMode === "dark" ? darkTheme : lightTheme;
+  const styles = React.useMemo(() => createStyles(theme), [theme]);
+
+  React.useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(THEME_MODE_KEY)
+      .then((value) => {
+        if (mounted && (value === "light" || value === "dark")) setThemeMode(value);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const machines = commandCenter.data?.machines || EMPTY_MACHINES;
   const rawAgents = commandCenter.data?.agents || EMPTY_AGENTS;
@@ -154,6 +219,34 @@ function CommandCenterScreen() {
     void auth.signOut();
   }, [auth]);
 
+  const toggleTheme = React.useCallback(() => {
+    setMenuVisible(false);
+    setThemeMode((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      AsyncStorage.setItem(THEME_MODE_KEY, next).catch(() => {});
+      return next;
+    });
+    void Haptics.selectionAsync();
+  }, []);
+
+  const confirmDeleteAgent = React.useCallback(
+    (agent: AgentSession) => {
+      const title = agentTitle(agent);
+      Alert.alert("Delete session", `Kill "${title}" on ${agent.machineHostname || agentMachineKey(agent)}?`, [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            deleteWindow.mutate({ agent });
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          },
+        },
+      ]);
+    },
+    [deleteWindow],
+  );
+
   const copyAssistantResponse = React.useCallback(async (agent: AgentSession) => {
     const text = agent.lastAssistantText || "";
     if (!text) return;
@@ -185,20 +278,30 @@ function CommandCenterScreen() {
     return () => subscription.remove();
   }, [queryClient]);
 
+  const withTheme = React.useCallback(
+    (node: React.ReactNode) => (
+      <ThemeContext.Provider value={theme}>
+        <StylesContext.Provider value={styles}>{node}</StylesContext.Provider>
+      </ThemeContext.Provider>
+    ),
+    [styles, theme],
+  );
+
   if (auth.loading) {
-    return (
+    return withTheme(
       <View style={[styles.center, { backgroundColor: theme.colors.background }]}>
         <ActivityIndicator color={theme.colors.accent} />
-      </View>
+      </View>,
     );
   }
 
   if (!auth.session) {
-    return <LoginScreen />;
+    return withTheme(<LoginScreen />);
   }
 
-  return (
+  return withTheme(
     <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+      <StatusBar style={theme.dark ? "light" : "dark"} />
       <View style={styles.header}>
         <View style={styles.headerTitleBlock}>
           <Text style={styles.title}>Tmux Mobile</Text>
@@ -232,6 +335,11 @@ function CommandCenterScreen() {
           <Text style={styles.errorText}>{commandCenter.error.message}</Text>
         </View>
       ) : null}
+      {deleteWindow.error ? (
+        <View style={styles.errorBox}>
+          <Text style={styles.errorText}>{deleteWindow.error.message}</Text>
+        </View>
+      ) : null}
 
       <FlatList
         data={agents}
@@ -260,21 +368,43 @@ function CommandCenterScreen() {
         renderItem={({ item }) => {
           const key = agentCardKey(item);
           const starred = isAgentStarred(item, stars);
+          const selectAgent = () => setSelectedAgent(item);
           return (
             <AgentCard
               agent={item}
               starred={starred}
+              selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
               onToggleStar={() => toggleStar(item)}
-              onSelect={() => setSelectedAgent(item)}
-              onSend={() => setSendTarget(item)}
-              onRename={() => setRenameTarget(item)}
-              onView={() => setViewTarget(item)}
-              onViewResponse={() => setResponseTarget(item)}
+              onSelect={selectAgent}
+              onSend={() => {
+                selectAgent();
+                setSendTarget(item);
+              }}
+              onRename={() => {
+                selectAgent();
+                setRenameTarget(item);
+              }}
+              onDelete={() => {
+                selectAgent();
+                confirmDeleteAgent(item);
+              }}
+              onView={() => {
+                selectAgent();
+                setViewTarget(item);
+              }}
+              onViewResponse={() => {
+                selectAgent();
+                setResponseTarget(item);
+              }}
               onCopyResponse={() => {
+                selectAgent();
                 copyAssistantResponse(item).catch(() => {});
               }}
               responseCopied={copiedResponseKey === key}
-              onTranscript={() => setTranscriptTarget(item)}
+              onTranscript={() => {
+                selectAgent();
+                setTranscriptTarget(item);
+              }}
             />
           );
         }}
@@ -298,6 +428,8 @@ function CommandCenterScreen() {
         onClose={() => setMenuVisible(false)}
         onStartAgent={openStartAgent}
         onRefresh={refreshCommandCenter}
+        onToggleTheme={toggleTheme}
+        themeMode={themeMode}
         onSignOut={signOut}
       />
       <StartAgentModal
@@ -306,11 +438,13 @@ function CommandCenterScreen() {
         selectedAgent={selectedAgent}
         onClose={() => setStartVisible(false)}
       />
-    </View>
+    </View>,
   );
 }
 
 function LoginScreen() {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
   const insets = useSafeAreaInsets();
   const auth = useTmuxMobileAuth();
   const [url, setUrl] = React.useState(auth.baseUrl);
@@ -320,6 +454,7 @@ function LoginScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       style={[styles.loginScreen, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 32 }]}
     >
+      <StatusBar style={theme.dark ? "light" : "dark"} />
       <View style={styles.loginPanel}>
         <Terminal size={34} color={theme.colors.accent} />
         <Text style={styles.loginTitle}>Tmux Mobile</Text>
@@ -375,6 +510,8 @@ function MachineStrip({
   active: string;
   onChange: (value: string) => void;
 }) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
   return (
     <ScrollView
       horizontal
@@ -415,6 +552,7 @@ function Chip({
   onPress: () => void;
   children: React.ReactNode;
 }) {
+  const styles = useAppStyles();
   return (
     <Pressable style={[styles.chip, active ? styles.chipActive : null]} onPress={onPress}>
       {typeof children === "string" ? (
@@ -429,10 +567,12 @@ function Chip({
 function AgentCard({
   agent,
   starred,
+  selected,
   onToggleStar,
   onSelect,
   onSend,
   onRename,
+  onDelete,
   onView,
   onViewResponse,
   onCopyResponse,
@@ -441,16 +581,20 @@ function AgentCard({
 }: {
   agent: AgentSession;
   starred: boolean;
+  selected: boolean;
   onToggleStar: () => void;
   onSelect: () => void;
   onSend: () => void;
   onRename: () => void;
+  onDelete: () => void;
   onView: () => void;
   onViewResponse: () => void;
   onCopyResponse: () => void;
   responseCopied: boolean;
   onTranscript: () => void;
 }) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
   const icon = AGENT_ICONS[String(agent.kind || "").toLowerCase()];
   const status = agent.waitingForInput ? "waiting" : agent.status || agent.turn || "unverified";
   const statusStyle =
@@ -463,7 +607,7 @@ function AgentCard({
           : styles.statusUnknown;
 
   return (
-    <Pressable style={styles.card} onPress={onSelect}>
+    <Pressable style={[styles.card, selected ? styles.cardSelected : null]} onPress={onSelect}>
       <Pressable
         accessibilityLabel={starred ? "Unstar session" : "Star session"}
         accessibilityState={{ selected: starred }}
@@ -560,6 +704,7 @@ function AgentCard({
             onPress={onTranscript}
           />
           <ActionButton icon={<Edit3 size={15} color={theme.colors.text} />} label="Rename" onPress={onRename} />
+          <ActionButton icon={<Trash2 size={15} color={theme.colors.danger} />} label="Delete session" onPress={onDelete} />
         </View>
       </View>
     </Pressable>
@@ -575,6 +720,7 @@ function ActionButton({
   label: string;
   onPress: () => void;
 }) {
+  const styles = useAppStyles();
   return (
     <Pressable accessibilityLabel={label} style={styles.actionButton} onPress={onPress}>
       {icon}
@@ -591,6 +737,7 @@ function IconButton({
   label: string;
   onPress: () => void;
 }) {
+  const styles = useAppStyles();
   return (
     <Pressable accessibilityLabel={label} style={styles.iconButton} onPress={onPress}>
       {icon}
@@ -604,6 +751,8 @@ function CommandMenu({
   onClose,
   onStartAgent,
   onRefresh,
+  onToggleTheme,
+  themeMode,
   onSignOut,
 }: {
   visible: boolean;
@@ -611,8 +760,12 @@ function CommandMenu({
   onClose: () => void;
   onStartAgent: () => void;
   onRefresh: () => void;
+  onToggleTheme: () => void;
+  themeMode: ThemeMode;
   onSignOut: () => void;
 }) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.menuLayer}>
@@ -627,6 +780,17 @@ function CommandMenu({
             icon={<RefreshCcw size={18} color={theme.colors.text} />}
             label="Refresh"
             onPress={onRefresh}
+          />
+          <MenuAction
+            icon={
+              themeMode === "dark" ? (
+                <Sun size={18} color={theme.colors.text} />
+              ) : (
+                <Moon size={18} color={theme.colors.text} />
+              )
+            }
+            label={themeMode === "dark" ? "Light theme" : "Dark theme"}
+            onPress={onToggleTheme}
           />
           <View style={styles.menuDivider} />
           <MenuAction
@@ -652,6 +816,7 @@ function MenuAction({
   danger?: boolean;
   onPress: () => void;
 }) {
+  const styles = useAppStyles();
   return (
     <Pressable style={styles.menuAction} onPress={onPress}>
       <View style={styles.menuActionIcon}>{icon}</View>
@@ -661,20 +826,111 @@ function MenuAction({
 }
 
 function SendModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
   const sendText = useSendText();
+  const sendKey = useSendKey();
+  const uploadFile = useUploadFile();
   const [text, setText] = React.useState("");
   const [enter, setEnter] = React.useState(true);
+  const [uploading, setUploading] = React.useState(false);
+  const [status, setStatus] = React.useState("");
 
   React.useEffect(() => {
     if (target) {
       setText("");
       setEnter(true);
+      setStatus("");
     }
   }, [target]);
+
+  const appendText = React.useCallback((value: string) => {
+    setText((current) => {
+      if (!current) return value;
+      return /\s$/.test(current) ? `${current}${value}` : `${current} ${value}`;
+    });
+  }, []);
+
+  const pickImage = React.useCallback(async () => {
+    if (!target) return;
+    setStatus("");
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setStatus("Photo library permission denied");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: true,
+      quality: 1,
+    });
+    if (result.canceled || result.assets.length === 0) return;
+
+    setUploading(true);
+    setStatus(result.assets.length === 1 ? "Uploading image..." : `Uploading ${result.assets.length} images...`);
+    try {
+      let count = 0;
+      for (const asset of result.assets) {
+        const fallbackName = asset.uri.split("/").pop() || `image-${Date.now()}.jpg`;
+        const uploaded = await uploadFile.mutateAsync({
+          agent: target,
+          file: {
+            uri: asset.uri,
+            name: asset.fileName || fallbackName,
+            type: asset.mimeType || "image/jpeg",
+          },
+        });
+        if (uploaded.path) {
+          appendText(uploaded.path);
+          count += 1;
+        }
+      }
+      setStatus(count === 1 ? "Image uploaded" : `${count} images uploaded`);
+      void Haptics.selectionAsync();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUploading(false);
+    }
+  }, [appendText, target, uploadFile]);
+
+  const sendTerminalKey = React.useCallback(
+    (entry: (typeof TERMINAL_KEYS)[number]) => {
+      if (!target) return;
+      const label = entry.label;
+      if ("command" in entry) {
+        sendText.mutate(
+          { agent: target, text: entry.command, enter: true },
+          {
+            onSuccess: () => setStatus(`Sent ${label}`),
+            onError: (error) => setStatus(error.message),
+          },
+        );
+      } else {
+        sendKey.mutate(
+          { agent: target, key: entry.key },
+          {
+            onSuccess: () => setStatus(`Sent ${label}`),
+            onError: (error) => setStatus(error.message),
+          },
+        );
+      }
+      void Haptics.selectionAsync();
+    },
+    [sendKey, sendText, target],
+  );
 
   return (
     <SheetModal visible={Boolean(target)} title="Send to pane" onClose={onClose}>
       <Text style={styles.sheetMeta}>{target ? agentTitle(target) : ""}</Text>
+      <View style={styles.shortcutRow}>
+        {PROMPT_SHORTCUTS.map((shortcut) => (
+          <Pressable key={shortcut.label} style={styles.shortcutChip} onPress={() => appendText(shortcut.text)}>
+            <Text style={styles.shortcutText}>{shortcut.label}</Text>
+          </Pressable>
+        ))}
+      </View>
       <TextInput
         value={text}
         onChangeText={setText}
@@ -684,6 +940,41 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
         placeholder="Type a prompt, command, or note..."
         placeholderTextColor={theme.colors.textMuted}
       />
+      <View style={styles.sendToolRow}>
+        <Pressable
+          style={[styles.toolButton, uploading ? styles.disabledButton : null]}
+          disabled={uploading || !target}
+          onPress={() => {
+            pickImage().catch((error) => {
+              setStatus(error instanceof Error ? error.message : String(error));
+            });
+          }}
+        >
+          {uploading ? (
+            <ActivityIndicator color={theme.colors.text} />
+          ) : (
+            <ImagePlus size={16} color={theme.colors.text} />
+          )}
+          <Text style={styles.toolButtonText}>Image</Text>
+        </Pressable>
+        <Text style={styles.sendStatus} numberOfLines={1}>
+          {status || sendKey.error?.message || uploadFile.error?.message || ""}
+        </Text>
+      </View>
+      <View style={styles.keyGrid}>
+        {TERMINAL_KEYS.map((entry) => (
+          <Pressable
+            key={entry.label}
+            style={[styles.keyButton, "danger" in entry && entry.danger ? styles.keyButtonDanger : null]}
+            disabled={!target || sendKey.isPending}
+            onPress={() => sendTerminalKey(entry)}
+          >
+            <Text style={[styles.keyButtonText, "danger" in entry && entry.danger ? styles.keyButtonTextDanger : null]}>
+              {entry.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
       <Pressable style={styles.toggleRow} onPress={() => setEnter((value) => !value)}>
         <View style={[styles.checkbox, enter ? styles.checkboxActive : null]}>
           {enter ? <Check size={13} color={theme.colors.surfaceRaised} /> : null}
@@ -711,6 +1002,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
 }
 
 function RenameModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
+  const styles = useAppStyles();
   const rename = useRenameWindow();
   const [name, setName] = React.useState("");
 
@@ -743,6 +1035,7 @@ function RenameModal({ target, onClose }: { target: AgentSession | null; onClose
 }
 
 function WindowViewModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
+  const styles = useAppStyles();
   const api = useTmuxMobileApi();
   const [data, setData] = React.useState<WindowViewResponse | null>(null);
   const [error, setError] = React.useState("");
@@ -795,6 +1088,8 @@ function ResponseModal({
   onCopy: (agent: AgentSession) => void;
   onClose: () => void;
 }) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
   const text = target?.lastAssistantText || "";
   return (
     <SheetModal visible={Boolean(target)} title="Last response" onClose={onClose} tall>
@@ -824,6 +1119,7 @@ function ResponseModal({
 }
 
 function TranscriptModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
+  const styles = useAppStyles();
   const api = useTmuxMobileApi();
   const [data, setData] = React.useState<AgentTranscriptResponse | null>(null);
   const [error, setError] = React.useState("");
@@ -880,6 +1176,8 @@ function StartAgentModal({
   selectedAgent: AgentSession | null;
   onClose: () => void;
 }) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
   const startAgent = useStartAgent();
   const [machineId, setMachineId] = React.useState("");
   const [kind, setKind] = React.useState<"claude" | "codex">("codex");
@@ -960,6 +1258,7 @@ function StartAgentModal({
 }
 
 function Segment({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
+  const styles = useAppStyles();
   return (
     <Pressable style={[styles.segment, active ? styles.segmentActive : null]} onPress={onPress}>
       <Text style={[styles.segmentText, active ? styles.segmentTextActive : null]}>{label}</Text>
@@ -980,6 +1279,8 @@ function SheetModal({
   onClose: () => void;
   tall?: boolean;
 }) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -1010,7 +1311,8 @@ function SheetModal({
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(theme: AppTheme) {
+  return StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: theme.colors.background,
@@ -1161,6 +1463,9 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 10,
   },
+  cardSelected: {
+    borderColor: theme.colors.accent,
+  },
   starButton: {
     position: "absolute",
     left: 14,
@@ -1176,7 +1481,7 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
   },
   starButtonActive: {
-    backgroundColor: "#fff7e0",
+    backgroundColor: theme.dark ? "#3a2f16" : "#fff7e0",
     borderColor: theme.colors.warning,
   },
   cardHeader: {
@@ -1427,6 +1732,77 @@ const styles = StyleSheet.create({
     textAlignVertical: "top",
     ...theme.typography.body,
   },
+  shortcutRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  shortcutChip: {
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: theme.radii.full,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    justifyContent: "center",
+  },
+  shortcutText: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+  },
+  sendToolRow: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  toolButton: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  toolButtonText: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+  },
+  sendStatus: {
+    flex: 1,
+    minWidth: 0,
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  keyGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  keyButton: {
+    minWidth: 46,
+    height: 36,
+    paddingHorizontal: 10,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  keyButtonDanger: {
+    borderColor: theme.colors.danger,
+  },
+  keyButtonText: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+  },
+  keyButtonTextDanger: {
+    color: theme.colors.danger,
+  },
   modalBackdrop: {
     flex: 1,
     justifyContent: "flex-end",
@@ -1563,4 +1939,5 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 6,
   },
-});
+  });
+}

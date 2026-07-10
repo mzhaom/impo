@@ -8,6 +8,17 @@ import type {
   WindowViewResponse,
 } from "./types";
 
+export interface UploadFileInput {
+  uri: string;
+  name: string;
+  type?: string | null;
+}
+
+export interface UploadFileResponse {
+  path?: string;
+  name?: string;
+}
+
 export class ApiError extends Error {
   status: number;
   body: unknown;
@@ -71,7 +82,14 @@ export class TmuxMobileApi {
 
     let body: BodyInit | undefined;
     if (options.body !== undefined) {
-      if (typeof options.body === "string" || options.body instanceof FormData) {
+      const isBlob = typeof Blob !== "undefined" && options.body instanceof Blob;
+      const isArrayBuffer = options.body instanceof ArrayBuffer;
+      if (
+        typeof options.body === "string" ||
+        options.body instanceof FormData ||
+        isBlob ||
+        isArrayBuffer
+      ) {
         body = options.body as BodyInit;
       } else {
         headers["content-type"] = "application/json";
@@ -149,11 +167,48 @@ export class TmuxMobileApi {
     });
   }
 
+  deleteWindow(machineId: string, windowId: string): Promise<unknown> {
+    return this.request("/api/windows", {
+      method: "DELETE",
+      machineId,
+      body: { windowId },
+    });
+  }
+
   sendText(machineId: string, paneId: string, text: string, enter = true): Promise<unknown> {
     return this.request("/api/send", {
       method: "POST",
       machineId,
       body: { paneId, text, enter, submitNudge: enter },
+    });
+  }
+
+  sendKey(machineId: string, paneId: string, key: string): Promise<unknown> {
+    return this.request("/api/key", {
+      method: "POST",
+      machineId,
+      body: { paneId, key },
+    });
+  }
+
+  async uploadFile(
+    machineId: string,
+    paneId: string,
+    file: UploadFileInput,
+  ): Promise<UploadFileResponse> {
+    const response = await fetch(file.uri);
+    const blob = await response.blob();
+    const params = new URLSearchParams({
+      paneId,
+      name: file.name || "upload",
+    });
+    return this.request<UploadFileResponse>(`/api/upload?${params.toString()}`, {
+      method: "POST",
+      machineId,
+      headers: {
+        "content-type": file.type || blob.type || "application/octet-stream",
+      },
+      body: blob,
     });
   }
 

@@ -51,6 +51,13 @@ export default {
       "expo-system-ui",
       "expo-status-bar",
       [
+        "expo-image-picker",
+        {
+          photosPermission:
+            "Allow Tmux Mobile to pick images and send them to tmux panes.",
+        },
+      ],
+      [
         "expo-splash-screen",
         {
           backgroundColor: "#f5f4ed",

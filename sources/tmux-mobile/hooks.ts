@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentMachineKey } from "./types";
 import type { AgentSession, CardStarsResponse } from "./types";
+import type { UploadFileInput } from "./api";
 import { useTmuxMobileApi } from "./auth";
 
 export const commandCenterKey = ["command-center"] as const;
@@ -69,6 +70,21 @@ export function useRenameWindow() {
   });
 }
 
+export function useDeleteWindow() {
+  const api = useTmuxMobileApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ agent }: { agent: AgentSession }) => {
+      if (!api) throw new Error("Not signed in");
+      if (!agent.windowId) throw new Error("No window target");
+      return api.deleteWindow(agentMachineKey(agent), agent.windowId);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: commandCenterKey });
+    },
+  });
+}
+
 export function useSendText() {
   const api = useTmuxMobileApi();
   const queryClient = useQueryClient();
@@ -88,6 +104,32 @@ export function useSendText() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: commandCenterKey });
+    },
+  });
+}
+
+export function useSendKey() {
+  const api = useTmuxMobileApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ agent, key }: { agent: AgentSession; key: string }) => {
+      if (!api) throw new Error("Not signed in");
+      if (!agent.paneId) throw new Error("No pane target");
+      return api.sendKey(agentMachineKey(agent), agent.paneId, key);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: commandCenterKey });
+    },
+  });
+}
+
+export function useUploadFile() {
+  const api = useTmuxMobileApi();
+  return useMutation({
+    mutationFn: async ({ agent, file }: { agent: AgentSession; file: UploadFileInput }) => {
+      if (!api) throw new Error("Not signed in");
+      if (!agent.paneId) throw new Error("No pane target");
+      return api.uploadFile(agentMachineKey(agent), agent.paneId, file);
     },
   });
 }
