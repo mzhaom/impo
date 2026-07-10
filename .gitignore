@@ -1,0 +1,54 @@
+# dependencies
+node_modules/
+.yarn/install-state.gz
+
+# Expo / generated output
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+/ios
+/android
+
+# Native signing and local SDK state
+*.aab
+*.apk
+*.ipa
+*.jks
+*.key
+*.p8
+*.p12
+*.pem
+*.mobileprovision
+.knownPackages
+build-tools/
+licenses/
+ndk/
+platform-tools/
+platforms/
+
+# Local env and logs
+.env
+.env*.local
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.tsbuildinfo
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Agent-local config
+.agent/
+.agents/
+.claude/
+.codex/
+.continue/
+.cursor/
+.gemini/
+.goose/
+.opencode/
+.windsurf/
+CLAUDE.local.md
