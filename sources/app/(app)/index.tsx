@@ -304,7 +304,7 @@ function CommandCenterScreen() {
       <StatusBar style={theme.dark ? "light" : "dark"} />
       <View style={styles.header}>
         <View style={styles.headerTitleBlock}>
-          <Text style={styles.title}>Tmux Mobile</Text>
+          <Text style={styles.title}>A-MAX AMUX</Text>
           <Text style={styles.headerMeta} numberOfLines={1}>
             {auth.session.user.email || auth.baseUrl}
           </Text>
@@ -457,7 +457,7 @@ function LoginScreen() {
       <StatusBar style={theme.dark ? "light" : "dark"} />
       <View style={styles.loginPanel}>
         <Terminal size={34} color={theme.colors.accent} />
-        <Text style={styles.loginTitle}>Tmux Mobile</Text>
+        <Text style={styles.loginTitle}>A-MAX AMUX</Text>
         <Text style={styles.loginText}>
           Native command center for Codex and Claude sessions running through tmux-mobile.
         </Text>
@@ -515,6 +515,7 @@ function MachineStrip({
   return (
     <ScrollView
       horizontal
+      style={styles.machineStripViewport}
       showsHorizontalScrollIndicator={false}
       contentContainerStyle={styles.machineStrip}
     >
@@ -532,6 +533,7 @@ function MachineStrip({
                   styles.chipText,
                   active === key ? styles.chipTextActive : null,
                 ]}
+                numberOfLines={1}
               >
                 {machineLabel(machine)}
               </Text>
@@ -556,7 +558,7 @@ function Chip({
   return (
     <Pressable style={[styles.chip, active ? styles.chipActive : null]} onPress={onPress}>
       {typeof children === "string" ? (
-        <Text style={[styles.chipText, active ? styles.chipTextActive : null]}>{children}</Text>
+        <Text style={[styles.chipText, active ? styles.chipTextActive : null]} numberOfLines={1}>{children}</Text>
       ) : (
         children
       )}
@@ -1216,7 +1218,12 @@ function StartAgentModal({
         <Segment active={kind === "claude"} label="Claude" onPress={() => setKind("claude")} />
       </View>
       <Text style={styles.inputLabel}>Machine</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.machineStrip}>
+      <ScrollView
+        horizontal
+        style={styles.machineStripViewport}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.machineStrip}
+      >
         {machines.map((machine) => {
           const key = machineKey(machine);
           return (
@@ -1390,13 +1397,24 @@ function createStyles(theme: AppTheme) {
     borderWidth: 1,
     borderColor: theme.colors.border,
   },
+  machineStripViewport: {
+    flexGrow: 0,
+    flexShrink: 0,
+    maxHeight: 50,
+  },
   machineStrip: {
     gap: 8,
     paddingHorizontal: 16,
     paddingVertical: 8,
+    alignItems: "center",
+    flexGrow: 0,
   },
   chip: {
-    minHeight: 34,
+    height: 34,
+    maxWidth: 188,
+    flexGrow: 0,
+    flexShrink: 0,
+    alignSelf: "center",
     paddingHorizontal: 12,
     borderRadius: theme.radii.full,
     borderWidth: 1,
@@ -1412,6 +1430,8 @@ function createStyles(theme: AppTheme) {
   chipText: {
     ...theme.typography.meta,
     color: theme.colors.textMuted,
+    flexShrink: 1,
+    minWidth: 0,
   },
   chipTextActive: {
     color: theme.colors.surfaceRaised,
@@ -1420,6 +1440,8 @@ function createStyles(theme: AppTheme) {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    maxWidth: 164,
+    minWidth: 0,
   },
   summaryRow: {
     paddingHorizontal: 16,
