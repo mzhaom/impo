@@ -24,8 +24,8 @@ import {
 import type { StyleProp, TextStyle } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
+import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
-import * as ImagePicker from "expo-image-picker";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { StatusBar } from "expo-status-bar";
 import { KeyboardAvoidingView, KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -59,6 +59,7 @@ import {
   Sun,
   Terminal,
   Trash2,
+  Upload,
   X,
 } from "lucide-react-native";
 import { useQueryClient } from "@tanstack/react-query";
@@ -117,7 +118,13 @@ const AGENT_ICONS: Record<string, number> = {
 const EMPTY_MACHINES: Machine[] = [];
 const EMPTY_AGENTS: AgentSession[] = [];
 const THEME_MODE_KEY = "tmux-mobile.theme-mode";
+const MACHINE_CHIP_READ_AT_KEY = "tmux-mobile.machine-chip-read-at";
+const MACHINE_CHIP_READ_GRACE_MS = 5_000;
 type ThemeMode = "light" | "dark";
+type MachineChipStats = {
+  workingCount: number;
+  unreadCount: number;
+};
 
 type ResponsiveLayout = {
   width: number;
@@ -266,6 +273,21 @@ function useAppStyles() {
 function activityTime(agent: AgentSession): number {
   const value = Date.parse(String(agent.lastActivityAt || ""));
   return Number.isFinite(value) ? value : 0;
+}
+
+function agentIsWorking(agent: AgentSession): boolean {
+  const status = agent.waitingForInput ? "waiting" : agent.status || agent.turn || "";
+  return String(status).toLowerCase() === "running";
+}
+
+function agentUnreadMessageTime(agent: AgentSession): number {
+  const assistantTime = parseDateMs(agent.lastAssistantAt);
+  return assistantTime || 0;
+}
+
+function formatUnreadCount(count: number): string {
+  if (count > 99) return "99+";
+  return String(count);
 }
 
 function parseDateMs(value: string | null | undefined): number {
@@ -463,6 +485,8 @@ function CommandCenterScreen() {
   const [menuVisible, setMenuVisible] = React.useState(false);
   const [pinsVisible, setPinsVisible] = React.useState(false);
   const [selectedAgent, setSelectedAgent] = React.useState<AgentSession | null>(null);
+  const [machineChipReadLoaded, setMachineChipReadLoaded] = React.useState(false);
+  const [machineChipReadAt, setMachineChipReadAt] = React.useState<number | null>(null);
   const appState = React.useRef(AppState.currentState);
   const copyResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copiedResponseKey, setCopiedResponseKey] = React.useState("");
@@ -488,6 +512,30 @@ function CommandCenterScreen() {
   const machines = commandCenter.data?.machines || EMPTY_MACHINES;
   const rawAgents = commandCenter.data?.agents || EMPTY_AGENTS;
   const stars = React.useMemo(() => new Set(cardStars.data?.keys || []), [cardStars.data?.keys]);
+  const latestUnreadMessageAt = React.useMemo(
+    () => rawAgents.reduce((latest, agent) => Math.max(latest, agentUnreadMessageTime(agent)), 0),
+    [rawAgents],
+  );
+  const machineReadThreshold = machineChipReadAt ?? Number.POSITIVE_INFINITY;
+  const machineChipStats = React.useMemo(() => {
+    const byMachine = new Map<string, MachineChipStats>();
+    const all: MachineChipStats = { workingCount: 0, unreadCount: 0 };
+    rawAgents.forEach((agent) => {
+      const key = agentMachineKey(agent);
+      const stats = byMachine.get(key) || { workingCount: 0, unreadCount: 0 };
+      if (agentIsWorking(agent)) {
+        stats.workingCount += 1;
+        all.workingCount += 1;
+      }
+      const messageTime = agentUnreadMessageTime(agent);
+      if (messageTime > machineReadThreshold) {
+        stats.unreadCount += 1;
+        all.unreadCount += 1;
+      }
+      byMachine.set(key, stats);
+    });
+    return { all, byMachine };
+  }, [machineReadThreshold, rawAgents]);
   const agents = React.useMemo(() => {
     const filtered =
       machineFilter === "all"
@@ -516,6 +564,45 @@ function CommandCenterScreen() {
       void Haptics.selectionAsync();
     },
     [cardStars.data?.keys, toggleCardStar],
+  );
+
+  React.useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(MACHINE_CHIP_READ_AT_KEY)
+      .then((value) => {
+        if (!mounted) return;
+        const parsed = Number(value || "");
+        setMachineChipReadAt(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+        setMachineChipReadLoaded(true);
+      })
+      .catch(() => {
+        if (mounted) setMachineChipReadLoaded(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!machineChipReadLoaded || machineChipReadAt !== null) return;
+    const initialReadAt = Math.max(Date.now() + MACHINE_CHIP_READ_GRACE_MS, latestUnreadMessageAt);
+    setMachineChipReadAt(initialReadAt);
+    AsyncStorage.setItem(MACHINE_CHIP_READ_AT_KEY, String(initialReadAt)).catch(() => {});
+  }, [latestUnreadMessageAt, machineChipReadAt, machineChipReadLoaded]);
+
+  const markMachineChipsRead = React.useCallback(() => {
+    const nextReadAt = Math.max(Date.now() + MACHINE_CHIP_READ_GRACE_MS, latestUnreadMessageAt);
+    setMachineChipReadAt(nextReadAt);
+    AsyncStorage.setItem(MACHINE_CHIP_READ_AT_KEY, String(nextReadAt)).catch(() => {});
+  }, [latestUnreadMessageAt]);
+
+  const selectMachineFilter = React.useCallback(
+    (nextFilter: string) => {
+      setMachineFilter(nextFilter);
+      markMachineChipsRead();
+      void Haptics.selectionAsync();
+    },
+    [markMachineChipsRead],
   );
 
   const openStartAgent = React.useCallback(() => {
@@ -654,7 +741,9 @@ function CommandCenterScreen() {
       <MachineStrip
         machines={machines}
         active={machineFilter}
-        onChange={setMachineFilter}
+        allStats={machineChipStats.all}
+        statsByMachine={machineChipStats.byMachine}
+        onChange={selectMachineFilter}
       />
 
       <View style={styles.summaryRow}>
@@ -858,14 +947,28 @@ function LoginScreen() {
 function MachineStrip({
   machines,
   active,
+  allStats,
+  statsByMachine,
   onChange,
 }: {
   machines: Machine[];
   active: string;
+  allStats: MachineChipStats;
+  statsByMachine: Map<string, MachineChipStats>;
   onChange: (value: string) => void;
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const renderChipStatus = (stats: MachineChipStats) => (
+    <>
+      {stats.workingCount > 0 ? <View style={styles.machineChipWorkingDot} /> : null}
+      {stats.unreadCount > 0 ? (
+        <View style={styles.chipUnreadBadge}>
+          <Text style={styles.chipUnreadText}>{formatUnreadCount(stats.unreadCount)}</Text>
+        </View>
+      ) : null}
+    </>
+  );
   return (
     <ScrollView
       horizontal
@@ -874,10 +977,16 @@ function MachineStrip({
       contentContainerStyle={styles.machineStrip}
     >
       <Chip active={active === "all"} onPress={() => onChange("all")}>
-        All
+        <View style={styles.machineChipContent}>
+          <Text style={[styles.chipText, active === "all" ? styles.chipTextActive : null]} numberOfLines={1}>
+            All
+          </Text>
+          {renderChipStatus(allStats)}
+        </View>
       </Chip>
       {machines.map((machine) => {
         const key = machineKey(machine);
+        const stats = statsByMachine.get(key) || { workingCount: 0, unreadCount: 0 };
         return (
           <Chip key={key} active={active === key} onPress={() => onChange(key)}>
             <View style={styles.machineChipContent}>
@@ -891,6 +1000,7 @@ function MachineStrip({
               >
                 {machineLabel(machine)}
               </Text>
+              {renderChipStatus(stats)}
             </View>
           </Chip>
         );
@@ -1557,6 +1667,19 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
   const [sendError, setSendError] = React.useState("");
   const [retryAction, setRetryAction] = React.useState<SendRetryAction | null>(null);
   const voiceResultRef = React.useRef("");
+  const targetWindowName = target?.windowName?.trim() || "";
+  const targetSessionName = target?.sessionName?.trim() || "";
+  const sendSheetTitle = targetWindowName || targetSessionName || "Send to pane";
+  const sendSheetMeta = target
+    ? [
+        "Send to pane",
+        targetSessionName && targetSessionName !== sendSheetTitle ? targetSessionName : "",
+        target.machineHostname || agentMachineKey(target),
+        target.cwd || "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
 
   React.useEffect(() => {
     if (target) {
@@ -1630,34 +1753,28 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
     });
   }, [recognizing]);
 
-  const pickImage = React.useCallback(async () => {
+  const pickUpload = React.useCallback(async () => {
     if (!target) return;
     setStatus("");
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      setStatus("Photo library permission denied");
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsMultipleSelection: true,
-      quality: 1,
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: true,
+      type: "*/*",
     });
     if (result.canceled || result.assets.length === 0) return;
 
     setUploading(true);
-    setStatus(result.assets.length === 1 ? "Uploading image..." : `Uploading ${result.assets.length} images...`);
+    setStatus(result.assets.length === 1 ? "Uploading file..." : `Uploading ${result.assets.length} files...`);
     try {
       let count = 0;
       for (const asset of result.assets) {
-        const fallbackName = asset.uri.split("/").pop() || `image-${Date.now()}.jpg`;
+        const fallbackName = asset.uri.split("/").pop() || `upload-${Date.now()}`;
         const uploaded = await uploadFile.mutateAsync({
           agent: target,
           file: {
             uri: asset.uri,
-            name: asset.fileName || fallbackName,
-            type: asset.mimeType || "image/jpeg",
+            name: asset.name || fallbackName,
+            type: asset.mimeType || "application/octet-stream",
           },
         });
         if (uploaded.path) {
@@ -1665,7 +1782,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           count += 1;
         }
       }
-      setStatus(count === 1 ? "Image uploaded" : `${count} images uploaded`);
+      setStatus(count === 1 ? "File uploaded" : `${count} files uploaded`);
       void Haptics.selectionAsync();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -1713,11 +1830,12 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
   );
 
   const sendCurrentText = React.useCallback(() => {
-    if (!target || sendText.isPending) return;
+    const value = text.trim();
+    if (!target || sendText.isPending || !value) return;
     clearSendFailure();
     setStatus("Sending...");
     sendText.mutate(
-      { agent: target, text, enter: true },
+      { agent: target, text: value, enter: true },
       {
         onSuccess: () => onClose(),
         onError: (error) => {
@@ -1740,9 +1858,9 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
   }, [retryAction, sendCurrentText, sendTerminalKey]);
 
   return (
-    <SheetModal visible={Boolean(target)} title="Send to pane" onClose={onClose}>
+    <SheetModal visible={Boolean(target)} title={sendSheetTitle} onClose={onClose}>
       <Text style={styles.sheetMeta} numberOfLines={2}>
-        {target ? agentTitle(target) : ""}
+        {sendSheetMeta}
       </Text>
       <View style={styles.shortcutRow}>
         {PROMPT_SHORTCUTS.map((shortcut) => (
@@ -1804,7 +1922,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           style={[styles.toolButton, uploading ? styles.disabledButton : null]}
           disabled={uploading || !target}
           onPress={() => {
-            pickImage().catch((error) => {
+            pickUpload().catch((error) => {
               setStatus(error instanceof Error ? error.message : String(error));
             });
           }}
@@ -1812,9 +1930,9 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           {uploading ? (
             <ActivityIndicator color={theme.colors.text} />
           ) : (
-            <ImagePlus size={16} color={theme.colors.text} />
+            <Upload size={16} color={theme.colors.text} />
           )}
-          <Text style={styles.toolButtonText}>Image</Text>
+          <Text style={styles.toolButtonText}>Upload</Text>
         </Pressable>
         <Text style={styles.sendStatus} numberOfLines={1}>
           {status || sendError || sendKey.error?.message || uploadFile.error?.message || ""}
@@ -1850,8 +1968,8 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
         ))}
       </View>
       <Pressable
-        style={[styles.primaryButton, sendText.isPending ? styles.disabledButton : null]}
-        disabled={!target || sendText.isPending}
+        style={[styles.primaryButton, sendText.isPending || !text.trim() ? styles.disabledButton : null]}
+        disabled={!target || sendText.isPending || !text.trim()}
         onPress={sendCurrentText}
       >
         {sendText.isPending ? <ActivityIndicator color={theme.colors.surfaceRaised} /> : <Text style={styles.primaryButtonText}>Send</Text>}
@@ -3607,9 +3725,9 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     alignItems: "center",
     flexGrow: 0,
   },
-  chip: {
-    height: 34,
-    maxWidth: 188,
+	  chip: {
+	    height: 34,
+	    maxWidth: 220,
     flexGrow: 0,
     flexShrink: 0,
     alignSelf: "center",
@@ -3631,16 +3749,39 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     flexShrink: 1,
     minWidth: 0,
   },
-  chipTextActive: {
-    color: theme.colors.surfaceRaised,
-  },
-  machineChipContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    maxWidth: 164,
-    minWidth: 0,
-  },
+	  chipTextActive: {
+	    color: theme.colors.surfaceRaised,
+	  },
+	  machineChipContent: {
+	    flexDirection: "row",
+	    alignItems: "center",
+	    gap: 6,
+	    maxWidth: 196,
+	    minWidth: 0,
+	  },
+	  machineChipWorkingDot: {
+	    width: 7,
+	    height: 7,
+	    borderRadius: theme.radii.full,
+	    backgroundColor: theme.colors.warning,
+	    flexShrink: 0,
+	  },
+	  chipUnreadBadge: {
+	    minWidth: 18,
+	    height: 18,
+	    paddingHorizontal: 5,
+	    borderRadius: theme.radii.full,
+	    backgroundColor: theme.colors.danger,
+	    alignItems: "center",
+	    justifyContent: "center",
+	    flexShrink: 0,
+	  },
+	  chipUnreadText: {
+	    fontFamily: "Lato_700Bold",
+	    fontSize: 10,
+	    lineHeight: 12,
+	    color: theme.colors.surfaceRaised,
+	  },
 	  summaryRow: {
 	    width: "100%",
 	    maxWidth: layout.contentMaxWidth,
