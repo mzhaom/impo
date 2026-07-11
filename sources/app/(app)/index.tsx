@@ -29,7 +29,7 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { StatusBar } from "expo-status-bar";
-import { KeyboardAvoidingView, KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown, { type RenderRules } from "react-native-markdown-display";
 import { toByteArray } from "base64-js";
@@ -2222,7 +2222,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const paneTailScrollRef = React.useRef<ScrollView | null>(null);
   const pollingRef = React.useRef(false);
   const terminalInputRef = React.useRef("");
-  const terminalDirectNativeTextRef = React.useRef("");
   const terminalDirectSendQueueRef = React.useRef<Promise<unknown>>(Promise.resolve());
   const terminalRefreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const terminalSuppressChangeRef = React.useRef(false);
@@ -2238,7 +2237,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const [status, setStatus] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
-  const terminalUsesHardwareKeys = windowWidth >= 760;
+  const terminalAutoFocus = windowWidth >= 760;
 
   React.useEffect(() => {
     terminalInputRef.current = terminalInput;
@@ -2251,7 +2250,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     setTerminalInput("");
     setTerminalKeyboardVisible(false);
     terminalInputRef.current = "";
-    terminalDirectNativeTextRef.current = "";
     terminalSuppressChangeRef.current = false;
     if (terminalVoiceActiveRef.current) {
       ExpoSpeechRecognitionModule.stop();
@@ -2356,16 +2354,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     [scheduleTerminalRefresh, target],
   );
 
-  const sendTerminalDirectText = React.useCallback(
-    (text: string) => {
-      if (!api || !target || !activePaneId || !text) return;
-      const machine = machineId;
-      const pane = activePaneId;
-      enqueueTerminalDirectAction("Keyboard input", () => api.sendText(machine, pane, text, false));
-    },
-    [activePaneId, api, enqueueTerminalDirectAction, machineId, target],
-  );
-
   const sendTerminalDirectKey = React.useCallback(
     (key: string) => {
       if (!api || !target || !activePaneId || !key) return;
@@ -2385,38 +2373,16 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     }, 80);
   }, []);
 
-  const handleTerminalInputChange = React.useCallback(
-    (value: string) => {
-      if (terminalSuppressChangeRef.current) {
-        terminalSuppressChangeRef.current = false;
-        if (terminalSuppressChangeTimerRef.current) {
-          clearTimeout(terminalSuppressChangeTimerRef.current);
-          terminalSuppressChangeTimerRef.current = null;
-        }
-        setTerminalInput(terminalInputRef.current);
-        return;
+  const handleTerminalInputChange = React.useCallback((value: string) => {
+    if (terminalSuppressChangeRef.current) {
+      terminalSuppressChangeRef.current = false;
+      if (terminalSuppressChangeTimerRef.current) {
+        clearTimeout(terminalSuppressChangeTimerRef.current);
+        terminalSuppressChangeTimerRef.current = null;
       }
-      const current = terminalInputRef.current;
-      if (!current && !value) {
-        terminalDirectNativeTextRef.current = "";
-        setTerminalInput("");
-        return;
-      }
-      if (!current && value) {
-        const previousNativeText = terminalDirectNativeTextRef.current;
-        const directText = value.startsWith(previousNativeText)
-          ? value.slice(previousNativeText.length)
-          : value;
-        terminalDirectNativeTextRef.current = value;
-        sendTerminalDirectText(directText);
-        setTerminalInput("");
-        return;
-      }
-      terminalDirectNativeTextRef.current = "";
-      setTerminalInput(value);
-    },
-    [sendTerminalDirectText],
-  );
+    }
+    setTerminalInput(value);
+  }, []);
 
   const handleTerminalKeyPress = React.useCallback(
     (event: { nativeEvent: { key: string } }) => {
@@ -2686,11 +2652,11 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           value={terminalInput}
           onChangeText={handleTerminalInputChange}
           onKeyPress={handleTerminalKeyPress}
-          autoFocus={terminalUsesHardwareKeys}
+          autoFocus={terminalAutoFocus}
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="send"
-          showSoftInputOnFocus={!terminalUsesHardwareKeys}
+          showSoftInputOnFocus
           submitBehavior="submit"
           onSubmitEditing={() => sendTerminalInput({ submit: true })}
           style={styles.terminalInput}
@@ -3591,7 +3557,7 @@ function SheetModal({
   const sheetIsWide = windowWidth >= 760;
   const keyboardAffectsSheet = !sheetIsWide || !tall;
   const keyboardOffset = visible && keyboardAffectsSheet ? keyboardHeight : 0;
-  const keyboardGap = keyboardOffset > 0 ? 10 : 0;
+  const keyboardGap = 0;
   const fullscreenActive = Boolean(fullscreenOnWide && sheetIsWide);
   const availableSheetHeight = Math.max(
     220,
@@ -3617,17 +3583,15 @@ function SheetModal({
       {children}
     </View>
   ) : (
-    <KeyboardAwareScrollView
+    <ScrollView
       style={styles.sheetBody}
       contentContainerStyle={[styles.sheetContent, styles.sheetContentKeyboard]}
       keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
       keyboardShouldPersistTaps="handled"
-      bottomOffset={24}
-      extraKeyboardSpace={0}
       showsVerticalScrollIndicator={false}
     >
       {children}
-    </KeyboardAwareScrollView>
+    </ScrollView>
   );
 
   return (
