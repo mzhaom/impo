@@ -174,7 +174,8 @@ type TerminalKeyEntry =
   | { label: string; key: string; danger?: boolean }
   | { label: string; command: string; danger?: boolean };
 
-const TERMINAL_KEYS: readonly TerminalKeyEntry[] = [
+const TERMINAL_KEYBOARD_KEYS: readonly TerminalKeyEntry[] = [
+  { label: "Ent", key: "Enter" },
   { label: "Esc", key: "Escape" },
   { label: "^C", key: "C-c", danger: true },
   { label: "^Z", key: "C-z", danger: true },
@@ -184,22 +185,6 @@ const TERMINAL_KEYS: readonly TerminalKeyEntry[] = [
   { label: "⌫", key: "BSpace" },
   { label: "⌫line", key: "C-u" },
   { label: "↓", key: "Down" },
-] as const;
-
-const TERMINAL_INPUT_KEYS: readonly TerminalKeyEntry[] = [
-  { label: "Enter", key: "Enter" },
-  { label: "Tab", key: "Tab" },
-  { label: "Esc", key: "Escape" },
-  { label: "↑", key: "Up" },
-  { label: "↓", key: "Down" },
-  { label: "←", key: "Left" },
-  { label: "→", key: "Right" },
-  { label: "⌫", key: "BSpace" },
-  { label: "⌫line", key: "C-u" },
-  { label: "^C", key: "C-c", danger: true },
-  { label: "^D", key: "C-d", danger: true },
-  { label: "^Z", key: "C-z", danger: true },
-  { label: "fg", command: "fg" },
 ] as const;
 const TERMINAL_INITIAL_LINES = 260;
 const TERMINAL_REFRESH_LINES = 320;
@@ -1726,6 +1711,61 @@ function VoiceWaveform() {
   );
 }
 
+function TerminalKeyboardSheet({
+  visible,
+  disabled,
+  onClose,
+  onKey,
+  onShortcut,
+}: {
+  visible: boolean;
+  disabled?: boolean;
+  onClose: () => void;
+  onKey: (entry: TerminalKeyEntry) => void;
+  onShortcut?: (text: string) => void;
+}) {
+  const styles = useAppStyles();
+
+  return (
+    <SheetModal visible={visible} title="Terminal keys" onClose={onClose}>
+      {onShortcut ? (
+        <View style={styles.shortcutRow}>
+          {PROMPT_SHORTCUTS.map((shortcut) => (
+            <Pressable
+              key={shortcut.label}
+              style={styles.shortcutChip}
+              disabled={disabled}
+              onPress={() => {
+                onShortcut(shortcut.text);
+                void Haptics.selectionAsync();
+              }}
+            >
+              <Text style={styles.shortcutText}>{shortcut.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      <View style={styles.keyGrid}>
+        {TERMINAL_KEYBOARD_KEYS.map((entry) => (
+          <Pressable
+            key={entry.label}
+            style={[styles.keyButton, entry.danger ? styles.keyButtonDanger : null]}
+            disabled={disabled}
+            onPress={() => {
+              onKey(entry);
+              onClose();
+            }}
+          >
+            <Text style={[styles.keyButtonText, entry.danger ? styles.keyButtonTextDanger : null]}>
+              {entry.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+    </SheetModal>
+  );
+}
+
 function SendModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
@@ -1735,6 +1775,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
   const [text, setText] = React.useState("");
   const [uploading, setUploading] = React.useState(false);
   const [uploadPickerVisible, setUploadPickerVisible] = React.useState(false);
+  const [keyboardVisible, setKeyboardVisible] = React.useState(false);
   const [recognizing, setRecognizing] = React.useState(false);
   const [status, setStatus] = React.useState("");
   const [sendError, setSendError] = React.useState("");
@@ -1760,6 +1801,8 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
       setStatus("");
       setSendError("");
       setRetryAction(null);
+      setUploadPickerVisible(false);
+      setKeyboardVisible(false);
     }
   }, [target]);
 
@@ -1941,12 +1984,12 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
   );
 
   const sendCurrentText = React.useCallback(() => {
-    const value = text.trim();
-    if (!target || sendText.isPending || !value) return;
+    const value = text;
+    if (!target || sendText.isPending || !value.trim()) return;
     clearSendFailure();
     setStatus("Sending...");
     sendText.mutate(
-      { agent: target, text: value, enter: false },
+      { agent: target, text: value, enter: true },
       {
         onSuccess: () => onClose(),
         onError: (error) => {
@@ -2043,6 +2086,14 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           )}
           <Text style={styles.toolButtonText}>Upload</Text>
         </Pressable>
+        <Pressable
+          style={styles.toolButton}
+          disabled={!target || sendText.isPending || sendKey.isPending}
+          onPress={() => setKeyboardVisible(true)}
+        >
+          <Terminal size={16} color={theme.colors.text} />
+          <Text style={styles.toolButtonText}>Keys</Text>
+        </Pressable>
         <Text style={styles.sendStatus} numberOfLines={1}>
           {status || sendError || sendKey.error?.message || uploadFile.error?.message || ""}
         </Text>
@@ -2062,20 +2113,6 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           </Pressable>
         </View>
       ) : null}
-      <View style={styles.keyGrid}>
-        {TERMINAL_KEYS.map((entry) => (
-          <Pressable
-            key={entry.label}
-            style={[styles.keyButton, "danger" in entry && entry.danger ? styles.keyButtonDanger : null]}
-            disabled={!target || sendKey.isPending}
-            onPress={() => sendTerminalKey(entry)}
-          >
-            <Text style={[styles.keyButtonText, "danger" in entry && entry.danger ? styles.keyButtonTextDanger : null]}>
-              {entry.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
       <Pressable
         style={[styles.primaryButton, sendText.isPending || !text.trim() ? styles.disabledButton : null]}
         disabled={!target || sendText.isPending || !text.trim()}
@@ -2121,6 +2158,13 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           </View>
         </Pressable>
       </SheetModal>
+      <TerminalKeyboardSheet
+        visible={keyboardVisible && Boolean(target)}
+        disabled={!target || sendText.isPending || sendKey.isPending}
+        onClose={() => setKeyboardVisible(false)}
+        onKey={sendTerminalKey}
+        onShortcut={appendText}
+      />
     </SheetModal>
   );
 }
@@ -2188,6 +2232,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const [data, setData] = React.useState<WindowViewResponse | null>(null);
   const [terminalText, setTerminalText] = React.useState("");
   const [terminalInput, setTerminalInput] = React.useState("");
+  const [terminalKeyboardVisible, setTerminalKeyboardVisible] = React.useState(false);
   const [terminalRecognizing, setTerminalRecognizing] = React.useState(false);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
@@ -2204,6 +2249,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     setData(null);
     setTerminalText("");
     setTerminalInput("");
+    setTerminalKeyboardVisible(false);
     terminalInputRef.current = "";
     terminalDirectNativeTextRef.current = "";
     terminalSuppressChangeRef.current = false;
@@ -2495,7 +2541,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
 
   const sendTerminalInput = React.useCallback((options?: { submit?: boolean }) => {
     if (!target || sendText.isPending || sendKey.isPending) return;
-    const submit = Boolean(options?.submit);
+    const submit = options?.submit ?? true;
     const value = terminalInput;
     setStatus("Sending...");
     if (!value) {
@@ -2535,7 +2581,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const sendTerminalKey = React.useCallback(
     (entry: TerminalKeyEntry) => {
       if (!target || sendText.isPending || sendKey.isPending) return;
-      if (entry.label === "Enter" && terminalInput) {
+      if ("key" in entry && entry.key === "Enter" && terminalInput) {
         sendTerminalInput({ submit: true });
         return;
       }
@@ -2628,6 +2674,14 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
             <Mic size={17} color={theme.colors.text} />
           )}
         </Pressable>
+        <Pressable
+          accessibilityLabel="Open terminal keys"
+          style={styles.terminalVoiceButton}
+          disabled={!target || sendText.isPending || sendKey.isPending}
+          onPress={() => setTerminalKeyboardVisible(true)}
+        >
+          <Terminal size={17} color={theme.colors.text} />
+        </Pressable>
         <TextInput
           value={terminalInput}
           onChangeText={handleTerminalInputChange}
@@ -2638,7 +2692,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           returnKeyType="send"
           showSoftInputOnFocus={!terminalUsesHardwareKeys}
           submitBehavior="submit"
-          onSubmitEditing={() => sendTerminalInput()}
+          onSubmitEditing={() => sendTerminalInput({ submit: true })}
           style={styles.terminalInput}
           placeholder="Type and press Enter"
           placeholderTextColor={theme.colors.textMuted}
@@ -2646,8 +2700,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         <Pressable
           accessibilityLabel="Send terminal input"
           style={[styles.terminalSendButton, sendText.isPending || sendKey.isPending ? styles.disabledButton : null]}
-          disabled={!target || sendText.isPending || sendKey.isPending || !terminalInput.trim()}
-          onPress={() => sendTerminalInput()}
+          disabled={!target || sendText.isPending || sendKey.isPending}
+          onPress={() => sendTerminalInput({ submit: true })}
         >
           {sendText.isPending || sendKey.isPending ? (
             <ActivityIndicator color={theme.colors.surfaceRaised} />
@@ -2656,20 +2710,13 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           )}
         </Pressable>
       </View>
-      <View style={styles.terminalKeyGrid}>
-        {TERMINAL_INPUT_KEYS.map((entry) => (
-          <Pressable
-            key={entry.label}
-            style={[styles.terminalKeyButton, entry.danger ? styles.terminalKeyButtonDanger : null]}
-            disabled={!target || sendText.isPending || sendKey.isPending}
-            onPress={() => sendTerminalKey(entry)}
-          >
-            <Text style={[styles.terminalKeyText, entry.danger ? styles.terminalKeyTextDanger : null]}>
-              {entry.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      <TerminalKeyboardSheet
+        visible={terminalKeyboardVisible && Boolean(target)}
+        disabled={!target || sendText.isPending || sendKey.isPending}
+        onClose={() => setTerminalKeyboardVisible(false)}
+        onKey={sendTerminalKey}
+        onShortcut={appendTerminalInput}
+      />
     </SheetModal>
   );
 }
@@ -4807,34 +4854,6 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     backgroundColor: theme.colors.accent,
     alignItems: "center",
     justifyContent: "center",
-  },
-  terminalKeyGrid: {
-    width: "100%",
-    minWidth: 0,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  terminalKeyButton: {
-    minWidth: 48,
-    height: 40,
-    paddingHorizontal: 10,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceRaised,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  terminalKeyButtonDanger: {
-    borderColor: theme.colors.danger,
-  },
-  terminalKeyText: {
-    ...theme.typography.meta,
-    color: theme.colors.text,
-  },
-  terminalKeyTextDanger: {
-    color: theme.colors.danger,
   },
   transcriptBox: {
     flex: 1,

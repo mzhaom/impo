@@ -241,11 +241,11 @@ export class TmuxMobileApi {
     });
   }
 
-  sendText(machineId: string, paneId: string, text: string, enter = true): Promise<unknown> {
+  sendText(machineId: string, paneId: string, text: string, enter = true, submitNudge = false): Promise<unknown> {
     return this.request("/api/send", {
       method: "POST",
       machineId,
-      body: { paneId, text, enter, submitNudge: enter },
+      body: { paneId, text, enter, submitNudge },
     });
   }
 
