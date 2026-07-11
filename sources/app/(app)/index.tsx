@@ -37,12 +37,16 @@ import { darkTheme, lightTheme } from "@/theme";
 import type { AppTheme } from "@/theme";
 import {
   Check,
+  AlertCircle,
+  CheckCircle,
+  CloudDownload,
   Copy,
   Edit3,
   Eye,
   ExternalLink,
   FileText,
   ImagePlus,
+  Info,
   Link2,
   Laptop,
   LogOut,
@@ -57,6 +61,7 @@ import {
   RefreshCcw,
   Send,
   Star,
+  Settings2,
   Sun,
   Terminal,
   Trash2,
@@ -101,6 +106,7 @@ import {
   resolveLinkedFilePath,
   splitFilePathText,
 } from "@/tmux-mobile/file-links";
+import { useOtaUpdates, type OtaUpdateController, type OtaUpdateNotice } from "@/tmux-mobile/updates";
 import type {
   AgentFileResponse,
   AgentSession,
@@ -539,6 +545,7 @@ function CommandCenterScreen() {
   const [startVisible, setStartVisible] = React.useState(false);
   const [menuVisible, setMenuVisible] = React.useState(false);
   const [pinsVisible, setPinsVisible] = React.useState(false);
+  const [settingsVisible, setSettingsVisible] = React.useState(false);
   const [selectedAgent, setSelectedAgent] = React.useState<AgentSession | null>(null);
   const [machineChipReadLoaded, setMachineChipReadLoaded] = React.useState(false);
   const [machineChipReadAt, setMachineChipReadAt] = React.useState<number | null>(null);
@@ -551,6 +558,7 @@ function CommandCenterScreen() {
     [windowHeight, windowWidth],
   );
   const styles = React.useMemo(() => createStyles(theme, layout), [layout, theme]);
+  const otaUpdates = useOtaUpdates();
 
   React.useEffect(() => {
     let mounted = true;
@@ -678,6 +686,12 @@ function CommandCenterScreen() {
     void Haptics.selectionAsync();
   }, []);
 
+  const openSettings = React.useCallback(() => {
+    setMenuVisible(false);
+    setSettingsVisible(true);
+    void Haptics.selectionAsync();
+  }, []);
+
   const openAgentFile = React.useCallback((agent: AgentSession, path: string) => {
     setSelectedAgent(agent);
     setFileTarget({ agent, path });
@@ -792,6 +806,18 @@ function CommandCenterScreen() {
           />
         </View>
       </View>
+
+      <UpdateNoticeBanner
+        notice={otaUpdates.notice}
+        onDismiss={otaUpdates.dismissNotice}
+        onAction={() => {
+          if (otaUpdates.notice?.action === "apply") {
+            otaUpdates.applyUpdate().catch(() => {});
+          } else if (otaUpdates.notice?.action === "check") {
+            otaUpdates.checkForUpdate("manual").catch(() => {});
+          }
+        }}
+      />
 
       <MachineStrip
         machines={machines}
@@ -919,6 +945,7 @@ function CommandCenterScreen() {
         onClose={() => setTranscriptTarget(null)}
       />
       <PinnedArtifactsModal visible={pinsVisible} onClose={() => setPinsVisible(false)} />
+      <SettingsModal visible={settingsVisible} ota={otaUpdates} onClose={() => setSettingsVisible(false)} />
       <CommandMenu
         visible={menuVisible}
         topOffset={insets.top + 54}
@@ -926,6 +953,7 @@ function CommandCenterScreen() {
         onStartAgent={openStartAgent}
         onPinnedArtifacts={openPinnedArtifacts}
         onRefresh={refreshCommandCenter}
+        onSettings={openSettings}
         onToggleTheme={toggleTheme}
         themeMode={themeMode}
         onSignOut={signOut}
@@ -1581,6 +1609,7 @@ function CommandMenu({
   onStartAgent,
   onPinnedArtifacts,
   onRefresh,
+  onSettings,
   onToggleTheme,
   themeMode,
   onSignOut,
@@ -1591,6 +1620,7 @@ function CommandMenu({
   onStartAgent: () => void;
   onPinnedArtifacts: () => void;
   onRefresh: () => void;
+  onSettings: () => void;
   onToggleTheme: () => void;
   themeMode: ThemeMode;
   onSignOut: () => void;
@@ -1616,6 +1646,11 @@ function CommandMenu({
             icon={<FileText size={18} color={theme.colors.text} />}
             label="Pinned artifacts"
             onPress={onPinnedArtifacts}
+          />
+          <MenuAction
+            icon={<Settings2 size={18} color={theme.colors.text} />}
+            label="Settings & updates"
+            onPress={onSettings}
           />
           <MenuAction
             icon={
@@ -1658,6 +1693,173 @@ function MenuAction({
       <View style={styles.menuActionIcon}>{icon}</View>
       <Text style={[styles.menuActionText, danger ? styles.menuActionTextDanger : null]}>{label}</Text>
     </Pressable>
+  );
+}
+
+function UpdateNoticeBanner({
+  notice,
+  onAction,
+  onDismiss,
+}: {
+  notice: OtaUpdateNotice | null;
+  onAction: () => void;
+  onDismiss: () => void;
+}) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  if (!notice) return null;
+
+  const toneColor =
+    notice.tone === "danger"
+      ? theme.colors.danger
+      : notice.tone === "warning"
+        ? theme.colors.warning
+        : notice.tone === "success"
+          ? theme.colors.success
+          : theme.colors.accent;
+  const backgroundColor =
+    notice.tone === "danger"
+      ? theme.dark
+        ? "#321d1d"
+        : "#fff0f0"
+      : notice.tone === "success"
+        ? theme.dark
+          ? "#182a1a"
+          : "#edf8ed"
+        : notice.tone === "warning"
+          ? theme.dark
+            ? "#302713"
+            : "#fff7df"
+          : theme.colors.surfaceRaised;
+  const icon =
+    notice.tone === "danger" ? (
+      <AlertCircle size={18} color={toneColor} />
+    ) : notice.tone === "success" ? (
+      <CheckCircle size={18} color={toneColor} />
+    ) : (
+      <CloudDownload size={18} color={toneColor} />
+    );
+
+  return (
+    <View style={styles.updateBannerWrap}>
+      <View style={[styles.updateBanner, { borderColor: toneColor, backgroundColor }]}>
+        <View style={styles.updateBannerIcon}>{icon}</View>
+        <View style={styles.updateBannerTextBlock}>
+          <Text style={styles.updateBannerTitle} numberOfLines={1}>
+            {notice.title}
+          </Text>
+          <Text style={styles.updateBannerMessage} numberOfLines={2}>
+            {notice.message}
+          </Text>
+        </View>
+        {notice.action ? (
+          <Pressable style={styles.updateBannerAction} onPress={onAction}>
+            <Text style={[styles.updateBannerActionText, { color: toneColor }]}>
+              {notice.actionLabel || "Open"}
+            </Text>
+          </Pressable>
+        ) : null}
+        <Pressable accessibilityLabel="Dismiss update notice" style={styles.updateBannerClose} onPress={onDismiss}>
+          <X size={16} color={theme.colors.textMuted} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function SettingsModal({
+  visible,
+  ota,
+  onClose,
+}: {
+  visible: boolean;
+  ota: OtaUpdateController;
+  onClose: () => void;
+}) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  const statusIcon = ota.isReady ? (
+    <CheckCircle size={20} color={theme.colors.success} />
+  ) : ota.phase === "error" ? (
+    <AlertCircle size={20} color={theme.colors.danger} />
+  ) : ota.isBusy ? (
+    <ActivityIndicator color={theme.colors.accent} />
+  ) : (
+    <CloudDownload size={20} color={theme.colors.accent} />
+  );
+
+  return (
+    <SheetModal visible={visible} title="Settings & updates" onClose={onClose}>
+      <View style={styles.settingsSection}>
+        <View style={styles.updateStatusCard}>
+          <View style={styles.updateStatusIcon}>{statusIcon}</View>
+          <View style={styles.updateStatusTextBlock}>
+            <Text style={styles.updateStatusTitle}>{ota.statusLabel}</Text>
+            <Text style={styles.updateStatusMeta} numberOfLines={2}>
+              JS {ota.info.jsVersion} · {ota.info.channel} · {ota.info.launchType}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.settingsButtonRow}>
+          <Pressable
+            style={[styles.settingsSecondaryButton, ota.isBusy ? styles.disabledButton : null]}
+            disabled={ota.isBusy}
+            onPress={() => ota.checkForUpdate("manual").catch(() => {})}
+          >
+            {ota.isBusy && !ota.isReady ? (
+              <ActivityIndicator color={theme.colors.text} />
+            ) : (
+              <RefreshCcw size={15} color={theme.colors.text} />
+            )}
+            <Text style={styles.secondaryButtonText}>Check</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.settingsPrimaryButton, !ota.isReady || ota.phase === "restarting" ? styles.disabledButton : null]}
+            disabled={!ota.isReady || ota.phase === "restarting"}
+            onPress={() => ota.applyUpdate().catch(() => {})}
+          >
+            {ota.phase === "restarting" ? (
+              <ActivityIndicator color={theme.colors.surfaceRaised} />
+            ) : (
+              <DownloadIcon color={theme.colors.surfaceRaised} />
+            )}
+            <Text style={styles.primaryButtonText}>Apply</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.settingsSection}>
+        <View style={styles.settingsSectionHeader}>
+          <Info size={16} color={theme.colors.textMuted} />
+          <Text style={styles.settingsSectionTitle}>Version</Text>
+        </View>
+        <UpdateInfoRow label="App version" value={ota.info.appVersion} />
+        <UpdateInfoRow label="Native build" value={ota.info.nativeBuild} />
+        <UpdateInfoRow label="JS version" value={ota.info.jsVersion} />
+        <UpdateInfoRow label="Update ID" value={ota.info.updateLabel} />
+        <UpdateInfoRow label="Runtime" value={ota.info.runtimeVersion} />
+        <UpdateInfoRow label="Channel" value={ota.info.channel} />
+        <UpdateInfoRow label="Created" value={ota.info.createdAt} />
+        <UpdateInfoRow label="Launch" value={ota.info.launchType} />
+        <UpdateInfoRow label="Check on launch" value={ota.info.checkOnLaunch} />
+      </View>
+    </SheetModal>
+  );
+}
+
+function DownloadIcon({ color }: { color: string }) {
+  return <CloudDownload size={15} color={color} />;
+}
+
+function UpdateInfoRow({ label, value }: { label: string; value: string }) {
+  const styles = useAppStyles();
+  return (
+    <View style={styles.settingsInfoRow}>
+      <Text style={styles.settingsInfoLabel}>{label}</Text>
+      <Text style={styles.settingsInfoValue} numberOfLines={2}>
+        {value}
+      </Text>
+    </View>
   );
 }
 
@@ -3976,6 +4178,69 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     ...theme.typography.meta,
     color: theme.colors.textMuted,
   },
+  updateBannerWrap: {
+    width: "100%",
+    maxWidth: layout.contentMaxWidth,
+    alignSelf: "center",
+    paddingHorizontal: layout.gutter,
+    paddingBottom: 8,
+  },
+  updateBanner: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 54,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  updateBannerIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: theme.radii.md,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.colors.surface,
+  },
+  updateBannerTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  updateBannerTitle: {
+    minWidth: 0,
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  updateBannerMessage: {
+    minWidth: 0,
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  updateBannerAction: {
+    minHeight: 34,
+    paddingHorizontal: 10,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  updateBannerActionText: {
+    ...theme.typography.meta,
+    fontFamily: "Lato_700Bold",
+  },
+  updateBannerClose: {
+    width: 32,
+    height: 32,
+    borderRadius: theme.radii.lg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 	  errorBox: {
 	    width: "100%",
 	    maxWidth: layout.contentMaxWidth - layout.gutter * 2,
@@ -4284,6 +4549,117 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     height: 1,
     marginVertical: 4,
     backgroundColor: theme.colors.border,
+  },
+  settingsSection: {
+    width: "100%",
+    minWidth: 0,
+    gap: 10,
+  },
+  settingsSectionHeader: {
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  settingsSectionTitle: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  updateStatusCard: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 64,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  updateStatusIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radii.lg,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.colors.surface,
+  },
+  updateStatusTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  updateStatusTitle: {
+    minWidth: 0,
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  updateStatusMeta: {
+    minWidth: 0,
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  settingsButtonRow: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    gap: 10,
+  },
+  settingsPrimaryButton: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 42,
+    paddingHorizontal: 14,
+    borderRadius: theme.radii.lg,
+    backgroundColor: theme.colors.accent,
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  settingsSecondaryButton: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 42,
+    paddingHorizontal: 14,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondaryButtonText: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  settingsInfoRow: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 34,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  settingsInfoLabel: {
+    width: 112,
+    flexShrink: 0,
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  settingsInfoValue: {
+    flex: 1,
+    minWidth: 0,
+    textAlign: "right",
+    ...theme.typography.meta,
+    color: theme.colors.text,
   },
 	  loginScreen: {
 	    flex: 1,

@@ -9,6 +9,7 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "web": "expo start --web",
+    "ota": "bash scripts/ota-update.sh",
     "typecheck": "tsc --noEmit",
     "lint": "eslint sources/",
     "test": "vitest"

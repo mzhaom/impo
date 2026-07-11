@@ -1,5 +1,7 @@
 const variant = process.env.APP_ENV || "development";
 const updateChannel = process.env.EAS_UPDATE_CHANNEL || (variant === "production" ? "production" : variant);
+const buildTime = process.env.BUILD_TIME || new Date().toISOString();
+const jsVersion = process.env.JS_UPDATE_VERSION || buildTime.replace(/[-:T]/g, "").slice(0, 12);
 
 export default {
   expo: {
@@ -92,6 +94,8 @@ export default {
     ],
     extra: {
       appEnv: variant,
+      jsVersion,
+      buildTime,
       tmuxMobileControllerUrl:
         process.env.TMUX_MOBILE_CONTROLLER_URL || "https://eng.impo.ai",
       eas: {
