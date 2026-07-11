@@ -1,4 +1,5 @@
 const variant = process.env.APP_ENV || "development";
+const updateChannel = process.env.EAS_UPDATE_CHANNEL || (variant === "production" ? "production" : variant);
 
 export default {
   expo: {
@@ -6,6 +7,12 @@ export default {
     slug: "tmux-mobile-mobile",
     version: "0.1.0",
     runtimeVersion: "1",
+    updates: {
+      url: "https://u.expo.dev/649f50ed-e509-4fbc-9d23-a8c9080ba635",
+      requestHeaders: {
+        "expo-channel-name": updateChannel,
+      },
+    },
     orientation: "default",
     icon: "./logo.png",
     scheme: "tmuxmobile",
@@ -62,6 +69,7 @@ export default {
       ],
       "expo-system-ui",
       "expo-status-bar",
+      "expo-updates",
       [
         "expo-image-picker",
         {
@@ -86,7 +94,10 @@ export default {
       appEnv: variant,
       tmuxMobileControllerUrl:
         process.env.TMUX_MOBILE_CONTROLLER_URL || "https://eng.impo.ai",
+      eas: {
+        projectId: "649f50ed-e509-4fbc-9d23-a8c9080ba635",
+      },
     },
-    owner: "impo",
+    owner: "meowoof",
   },
 };
