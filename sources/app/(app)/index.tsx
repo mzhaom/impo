@@ -1906,7 +1906,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
     clearSendFailure();
     setStatus("Sending...");
     sendText.mutate(
-      { agent: target, text: value, enter: true },
+      { agent: target, text: value, enter: false },
       {
         onSuccess: () => onClose(),
         onError: (error) => {
@@ -2417,11 +2417,16 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     }, 220);
   }, [refreshCapture]);
 
-  const sendTerminalInput = React.useCallback(() => {
+  const sendTerminalInput = React.useCallback((options?: { submit?: boolean }) => {
     if (!target || sendText.isPending || sendKey.isPending) return;
+    const submit = Boolean(options?.submit);
     const value = terminalInput;
     setStatus("Sending...");
     if (!value) {
+      if (!submit) {
+        setStatus("");
+        return;
+      }
       sendKey.mutate(
         { agent: target, key: "Enter" },
         {
@@ -2436,7 +2441,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
       return;
     }
     sendText.mutate(
-      { agent: target, text: value, enter: true },
+      { agent: target, text: value, enter: submit },
       {
         onSuccess: () => {
           setTerminalInput("");
@@ -2455,7 +2460,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     (entry: TerminalKeyEntry) => {
       if (!target || sendText.isPending || sendKey.isPending) return;
       if (entry.label === "Enter" && terminalInput) {
-        sendTerminalInput();
+        sendTerminalInput({ submit: true });
         return;
       }
       setStatus(`Sending ${entry.label}...`);
@@ -2557,7 +2562,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           returnKeyType="send"
           showSoftInputOnFocus={!terminalUsesHardwareKeys}
           submitBehavior="submit"
-          onSubmitEditing={sendTerminalInput}
+          onSubmitEditing={() => sendTerminalInput()}
           style={styles.terminalInput}
           placeholder="Type and press Enter"
           placeholderTextColor={theme.colors.textMuted}
@@ -2565,8 +2570,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         <Pressable
           accessibilityLabel="Send terminal input"
           style={[styles.terminalSendButton, sendText.isPending || sendKey.isPending ? styles.disabledButton : null]}
-          disabled={!target || sendText.isPending || sendKey.isPending}
-          onPress={sendTerminalInput}
+          disabled={!target || sendText.isPending || sendKey.isPending || !terminalInput.trim()}
+          onPress={() => sendTerminalInput()}
         >
           {sendText.isPending || sendKey.isPending ? (
             <ActivityIndicator color={theme.colors.surfaceRaised} />
