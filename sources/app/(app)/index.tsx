@@ -26,6 +26,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { StatusBar } from "expo-status-bar";
 import { KeyboardAvoidingView, KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -1733,6 +1734,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
   const uploadFile = useUploadFile();
   const [text, setText] = React.useState("");
   const [uploading, setUploading] = React.useState(false);
+  const [uploadPickerVisible, setUploadPickerVisible] = React.useState(false);
   const [recognizing, setRecognizing] = React.useState(false);
   const [status, setStatus] = React.useState("");
   const [sendError, setSendError] = React.useState("");
@@ -1824,21 +1826,18 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
     });
   }, [recognizing]);
 
-  const pickUpload = React.useCallback(async () => {
+  const uploadAssets = React.useCallback(async (
+    assets: Array<{ uri: string; name?: string | null; mimeType?: string | null }>,
+    label: string,
+  ) => {
     if (!target) return;
-    setStatus("");
-    const result = await DocumentPicker.getDocumentAsync({
-      copyToCacheDirectory: true,
-      multiple: true,
-      type: "*/*",
-    });
-    if (result.canceled || result.assets.length === 0) return;
-
+    if (assets.length === 0) return;
     setUploading(true);
-    setStatus(result.assets.length === 1 ? "Uploading file..." : `Uploading ${result.assets.length} files...`);
+    setUploadPickerVisible(false);
+    setStatus(assets.length === 1 ? `Uploading ${label}...` : `Uploading ${assets.length} ${label}s...`);
     try {
       let count = 0;
-      for (const asset of result.assets) {
+      for (const asset of assets) {
         const fallbackName = asset.uri.split("/").pop() || `upload-${Date.now()}`;
         const uploaded = await uploadFile.mutateAsync({
           agent: target,
@@ -1853,7 +1852,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           count += 1;
         }
       }
-      setStatus(count === 1 ? "File uploaded" : `${count} files uploaded`);
+      setStatus(count === 1 ? `${label[0].toUpperCase()}${label.slice(1)} uploaded` : `${count} ${label}s uploaded`);
       void Haptics.selectionAsync();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -1861,6 +1860,47 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
       setUploading(false);
     }
   }, [appendText, target, uploadFile]);
+
+  const pickImages = React.useCallback(async () => {
+    setStatus("");
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setStatus("Photos permission denied");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      quality: 1,
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    await uploadAssets(
+      result.assets.map((asset) => ({
+        uri: asset.uri,
+        name: asset.fileName || asset.uri.split("/").pop() || `image-${Date.now()}.jpg`,
+        mimeType: asset.mimeType || "image/jpeg",
+      })),
+      "image",
+    );
+  }, [uploadAssets]);
+
+  const pickFiles = React.useCallback(async () => {
+    setStatus("");
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: true,
+      type: "*/*",
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    await uploadAssets(
+      result.assets.map((asset) => ({
+        uri: asset.uri,
+        name: asset.name || asset.uri.split("/").pop() || `upload-${Date.now()}`,
+        mimeType: asset.mimeType || "application/octet-stream",
+      })),
+      "file",
+    );
+  }, [uploadAssets]);
 
   const sendTerminalKey = React.useCallback(
     (entry: TerminalKeyEntry) => {
@@ -1993,9 +2033,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           style={[styles.toolButton, uploading ? styles.disabledButton : null]}
           disabled={uploading || !target}
           onPress={() => {
-            pickUpload().catch((error) => {
-              setStatus(error instanceof Error ? error.message : String(error));
-            });
+            setUploadPickerVisible(true);
           }}
         >
           {uploading ? (
@@ -2045,6 +2083,44 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
       >
         {sendText.isPending ? <ActivityIndicator color={theme.colors.surfaceRaised} /> : <Text style={styles.primaryButtonText}>Send</Text>}
       </Pressable>
+      <SheetModal visible={uploadPickerVisible} title="Upload" onClose={() => setUploadPickerVisible(false)}>
+        <Pressable
+          style={[styles.uploadChoiceButton, uploading ? styles.disabledButton : null]}
+          disabled={uploading || !target}
+          onPress={() => {
+            pickImages().catch((error) => {
+              setUploadPickerVisible(false);
+              setStatus(error instanceof Error ? error.message : String(error));
+            });
+          }}
+        >
+          <View style={styles.uploadChoiceIcon}>
+            <ImagePlus size={20} color={theme.colors.text} />
+          </View>
+          <View style={styles.uploadChoiceTextBlock}>
+            <Text style={styles.uploadChoiceTitle}>Image</Text>
+            <Text style={styles.uploadChoiceSubtitle}>Choose photos from the library</Text>
+          </View>
+        </Pressable>
+        <Pressable
+          style={[styles.uploadChoiceButton, uploading ? styles.disabledButton : null]}
+          disabled={uploading || !target}
+          onPress={() => {
+            pickFiles().catch((error) => {
+              setUploadPickerVisible(false);
+              setStatus(error instanceof Error ? error.message : String(error));
+            });
+          }}
+        >
+          <View style={styles.uploadChoiceIcon}>
+            <FileText size={20} color={theme.colors.text} />
+          </View>
+          <View style={styles.uploadChoiceTextBlock}>
+            <Text style={styles.uploadChoiceTitle}>File</Text>
+            <Text style={styles.uploadChoiceSubtitle}>Choose documents or other files</Text>
+          </View>
+        </Pressable>
+      </SheetModal>
     </SheetModal>
   );
 }
@@ -4327,6 +4403,40 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   },
   toolButtonTextActive: {
     color: theme.colors.accent,
+  },
+  uploadChoiceButton: {
+    width: "100%",
+    minHeight: 62,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  uploadChoiceIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radii.md,
+    backgroundColor: theme.colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  uploadChoiceTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  uploadChoiceTitle: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  uploadChoiceSubtitle: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
   },
   voiceWaveform: {
     height: 18,
