@@ -261,8 +261,6 @@ type MarkdownPathRuleOptions = {
   selectable?: boolean;
 };
 
-const SHEET_DRAG_ZONE_HEIGHT = 92;
-
 function useAppTheme() {
   return React.useContext(ThemeContext);
 }
@@ -3437,14 +3435,10 @@ function SheetModal({
   const panResponder = React.useMemo(
     () =>
       PanResponder.create({
-        onMoveShouldSetPanResponderCapture: (event, gestureState) =>
-          event.nativeEvent.locationY <= SHEET_DRAG_ZONE_HEIGHT &&
-          gestureState.dy > 10 &&
-          Math.abs(gestureState.dx) < 36,
-        onMoveShouldSetPanResponder: (event, gestureState) =>
-          event.nativeEvent.locationY <= SHEET_DRAG_ZONE_HEIGHT &&
-          gestureState.dy > 10 &&
-          Math.abs(gestureState.dx) < 36,
+        onMoveShouldSetPanResponderCapture: (_event, gestureState) =>
+          gestureState.dy > 10 && Math.abs(gestureState.dx) < 36,
+        onMoveShouldSetPanResponder: (_event, gestureState) =>
+          gestureState.dy > 10 && Math.abs(gestureState.dx) < 36,
         onPanResponderGrant: () => {
           dragY.stopAnimation();
         },
@@ -3461,6 +3455,7 @@ function SheetModal({
         },
         onPanResponderTerminate: resetDrag,
         onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => false,
       }),
     [closeSheet, dragY, resetDrag],
   );
@@ -3517,7 +3512,6 @@ function SheetModal({
             style={[styles.modalKeyboard, fullscreenActive ? styles.modalKeyboardFullscreen : null]}
           >
             <Animated.View
-              {...panResponder.panHandlers}
               style={[
                 styles.sheet,
                 wide ? styles.sheetWide : null,
@@ -3527,7 +3521,7 @@ function SheetModal({
                 sheetGestureStyle,
               ]}
             >
-              <View style={styles.sheetGestureZone}>
+              <View {...panResponder.panHandlers} style={styles.sheetGestureZone}>
                 {fullscreenActive ? null : (
                   <View style={styles.sheetDragArea}>
                     <View style={styles.sheetGrabber} />
