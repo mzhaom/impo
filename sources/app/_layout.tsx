@@ -1,4 +1,3 @@
-import "react-native-gesture-handler";
 import "../theme.css";
 
 import * as React from "react";
