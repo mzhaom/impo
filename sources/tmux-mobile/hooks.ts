@@ -1,12 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentMachineKey } from "./types";
-import type { AgentSession, CardStarsResponse, PinsResponse } from "./types";
+import type {
+  AgentSession,
+  CardStarsResponse,
+  PinsResponse,
+  UserSnippetItem,
+  UserSnippetsResponse,
+} from "./types";
 import type { UploadFileInput } from "./api";
 import { useTmuxMobileApi } from "./auth";
 
 export const commandCenterKey = ["command-center"] as const;
 export const cardStarsKey = ["card-stars"] as const;
 export const pinsKey = ["pins"] as const;
+export const snippetsKey = ["snippets"] as const;
 
 export function useCommandCenter() {
   const api = useTmuxMobileApi();
@@ -40,6 +47,46 @@ export function usePins(enabled = true) {
     queryFn: async () => {
       if (!api) throw new Error("Not signed in");
       return api.pins();
+    },
+  });
+}
+
+export function useSnippets(enabled = true) {
+  const api = useTmuxMobileApi();
+  return useQuery({
+    queryKey: snippetsKey,
+    enabled: Boolean(api) && enabled,
+    queryFn: async () => {
+      if (!api) throw new Error("Not signed in");
+      return api.snippets();
+    },
+  });
+}
+
+export function useUpdateSnippets() {
+  const api = useTmuxMobileApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (items: UserSnippetItem[]) => {
+      if (!api) throw new Error("Not signed in");
+      return api.updateSnippets(items);
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData<UserSnippetsResponse>(snippetsKey, data);
+    },
+  });
+}
+
+export function useResetSnippets() {
+  const api = useTmuxMobileApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      if (!api) throw new Error("Not signed in");
+      return api.resetSnippets();
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData<UserSnippetsResponse>(snippetsKey, data);
     },
   });
 }

@@ -38,7 +38,10 @@ import type { AppTheme } from "@/theme";
 import {
   Check,
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   CheckCircle,
+  Circle,
   CloudDownload,
   Copy,
   Edit3,
@@ -48,16 +51,19 @@ import {
   ImagePlus,
   Info,
   Link2,
+  ListPlus,
   Laptop,
   LogOut,
   Maximize2,
   MessageSquareText,
   Mic,
   MicOff,
+  Minimize2,
   MoreVertical,
   Moon,
   Pin,
   Play,
+  Plus,
   RefreshCcw,
   Send,
   Star,
@@ -83,10 +89,13 @@ import {
   usePins,
   useRenameWindow,
   useRenamePin,
+  useResetSnippets,
   useSendKey,
   useSendText,
+  useSnippets,
   useStartAgent,
   useToggleCardStar,
+  useUpdateSnippets,
   useUploadFile,
 } from "@/tmux-mobile/hooks";
 import {
@@ -113,6 +122,7 @@ import type {
   AgentTranscriptResponse,
   ArtifactPin,
   Machine,
+  UserSnippetItem,
   WindowViewResponse,
 } from "@/tmux-mobile/types";
 
@@ -174,6 +184,29 @@ const StylesContext = React.createContext<AppStyles>(createStyles(lightTheme));
 const PROMPT_SHORTCUTS = [
   { label: "Yes", text: "yes" },
   { label: "Slash", text: "/" },
+] as const;
+
+const FALLBACK_SNIPPETS: UserSnippetItem[] = PROMPT_SHORTCUTS.map((item) => ({ text: item.text }));
+
+function cleanSnippetItems(items: Array<UserSnippetItem | string> | undefined | null): UserSnippetItem[] {
+  if (!Array.isArray(items)) return [];
+  const clean: UserSnippetItem[] = [];
+  for (const item of items.slice(0, 100)) {
+    const text = String(typeof item === "string" ? item : item?.text || "").slice(0, 2000);
+    if (text.trim()) clean.push({ text });
+  }
+  return clean;
+}
+
+const VOICE_CONTEXTUAL_STRINGS = [
+  "CJMUX",
+  "AMUX",
+  "Codex",
+  "Claude",
+  "tmux",
+  "terminal",
+  "session",
+  "agent",
 ] as const;
 
 type TerminalKeyEntry =
@@ -751,6 +784,13 @@ function CommandCenterScreen() {
     void Haptics.selectionAsync();
   }, []);
 
+  const replyToResponse = React.useCallback((agent: AgentSession) => {
+    setSelectedAgent(agent);
+    setResponseTarget(null);
+    setSendTarget(agent);
+    void Haptics.selectionAsync();
+  }, []);
+
   const activeShortcutAgent = React.useMemo(() => {
     if (agents.length === 0) return null;
     const selectedKey = selectedAgent ? agentCardKey(selectedAgent) : "";
@@ -1067,6 +1107,7 @@ function CommandCenterScreen() {
       <ResponseModal
         target={responseTarget}
         copied={responseTarget ? copiedResponseKey === agentCardKey(responseTarget) : false}
+        onReply={replyToResponse}
         onCopy={(agent) => {
           copyAssistantResponse(agent).catch(() => {});
         }}
@@ -1707,18 +1748,20 @@ function ActionButton({
   label,
   onPress,
   disabled,
+  active,
 }: {
   icon: React.ReactNode;
   label: string;
   onPress: () => void;
   disabled?: boolean;
+  active?: boolean;
 }) {
   const styles = useAppStyles();
   return (
     <Pressable
       accessibilityLabel={label}
       disabled={disabled}
-      style={[styles.actionButton, disabled ? styles.disabledButton : null]}
+      style={[styles.actionButton, active ? styles.actionButtonActive : null, disabled ? styles.disabledButton : null]}
       onPress={onPress}
     >
       {icon}
@@ -2054,6 +2097,224 @@ function VoiceWaveform() {
   );
 }
 
+type ServerVoiceMode = "idle" | "recording" | "transcribing";
+
+function voiceAudioContentType(uri: string): string {
+  const path = uri.split("?")[0]?.toLowerCase() || "";
+  if (path.endsWith(".wav")) return "audio/wav";
+  if (path.endsWith(".m4a") || path.endsWith(".mp4")) return "audio/mp4";
+  if (path.endsWith(".mp3") || path.endsWith(".mpeg") || path.endsWith(".mpga")) return "audio/mpeg";
+  if (path.endsWith(".webm")) return "audio/webm";
+  return "audio/wav";
+}
+
+function safelyAbortVoiceRecognition() {
+  try {
+    ExpoSpeechRecognitionModule.abort();
+  } catch {
+    // The native module can reject abort when recognition already ended.
+  }
+}
+
+function safelyStopVoiceRecognition() {
+  try {
+    ExpoSpeechRecognitionModule.stop();
+  } catch {
+    // The native module can reject stop when recognition already ended.
+  }
+}
+
+function useServerVoiceInput({
+  scopeKey,
+  machineId,
+  onText,
+  onStatus,
+  contextualStrings,
+}: {
+  scopeKey: string;
+  machineId: string;
+  onText: (value: string) => void;
+  onStatus: (value: string) => void;
+  contextualStrings: readonly string[];
+}) {
+  const api = useTmuxMobileApi();
+  const [mode, setModeState] = React.useState<ServerVoiceMode>("idle");
+  const activeRef = React.useRef(false);
+  const modeRef = React.useRef<ServerVoiceMode>("idle");
+  const audioUriRef = React.useRef("");
+  const lastTranscribedUriRef = React.useRef("");
+  const scopeKeyRef = React.useRef(scopeKey);
+
+  const setMode = React.useCallback((next: ServerVoiceMode) => {
+    modeRef.current = next;
+    setModeState(next);
+  }, []);
+
+  React.useEffect(() => {
+    if (scopeKeyRef.current && scopeKeyRef.current !== scopeKey && activeRef.current) {
+      activeRef.current = false;
+      audioUriRef.current = "";
+      lastTranscribedUriRef.current = "";
+      setMode("idle");
+      safelyAbortVoiceRecognition();
+    }
+    scopeKeyRef.current = scopeKey;
+  }, [scopeKey, setMode]);
+
+  React.useEffect(() => {
+    return () => {
+      if (!activeRef.current) return;
+      activeRef.current = false;
+      safelyAbortVoiceRecognition();
+    };
+  }, []);
+
+  const finishRecording = React.useCallback(async (uri: string | null | undefined) => {
+    if (!activeRef.current) return;
+    const audioUri = uri || audioUriRef.current;
+    audioUriRef.current = audioUri || "";
+    setMode("transcribing");
+    if (!api) {
+      activeRef.current = false;
+      setMode("idle");
+      onStatus("Voice input is not connected");
+      return;
+    }
+    if (!machineId) {
+      activeRef.current = false;
+      setMode("idle");
+      onStatus("Voice target is missing");
+      return;
+    }
+    if (!audioUri) {
+      activeRef.current = false;
+      setMode("idle");
+      onStatus("Voice recording was not saved");
+      return;
+    }
+    if (lastTranscribedUriRef.current === audioUri) return;
+    lastTranscribedUriRef.current = audioUri;
+    onStatus("Transcribing...");
+    try {
+      const result = await api.transcribeAudio(machineId, {
+        uri: audioUri,
+        type: voiceAudioContentType(audioUri),
+      });
+      const transcript = String(result.text || "").trim();
+      if (!transcript) {
+        onStatus("No speech detected");
+        return;
+      }
+      onText(transcript);
+      onStatus("Voice added");
+      void Haptics.selectionAsync();
+    } catch (error) {
+      onStatus(error instanceof Error ? `Voice failed: ${error.message}` : `Voice failed: ${String(error)}`);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      activeRef.current = false;
+      audioUriRef.current = "";
+      setMode("idle");
+    }
+  }, [api, machineId, onStatus, onText, setMode]);
+
+  useSpeechRecognitionEvent("start", () => {
+    if (!activeRef.current) return;
+    setMode("recording");
+    onStatus("Listening...");
+  });
+
+  useSpeechRecognitionEvent("audiostart", (event) => {
+    if (!activeRef.current) return;
+    audioUriRef.current = event.uri || "";
+  });
+
+  useSpeechRecognitionEvent("audioend", (event) => {
+    if (!activeRef.current) return;
+    void finishRecording(event.uri);
+  });
+
+  useSpeechRecognitionEvent("end", () => {
+    if (!activeRef.current) return;
+    if (modeRef.current === "recording") {
+      setMode("transcribing");
+      onStatus("Transcribing...");
+    }
+  });
+
+  useSpeechRecognitionEvent("error", (event) => {
+    if (!activeRef.current) return;
+    activeRef.current = false;
+    audioUriRef.current = "";
+    setMode("idle");
+    onStatus(event.message || `Voice input failed: ${event.error}`);
+  });
+
+  const toggle = React.useCallback(async () => {
+    if (modeRef.current === "recording") {
+      safelyStopVoiceRecognition();
+      setMode("transcribing");
+      onStatus("Transcribing...");
+      return;
+    }
+    if (modeRef.current === "transcribing") return;
+    onStatus("");
+    if (!api) {
+      onStatus("Voice input is not connected");
+      return;
+    }
+    if (!machineId || !scopeKey) {
+      onStatus("Voice target is missing");
+      return;
+    }
+    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+      onStatus("Voice input is not available on this device");
+      return;
+    }
+    if (!ExpoSpeechRecognitionModule.supportsRecording()) {
+      onStatus("Voice recording is not available on this device");
+      return;
+    }
+    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!permission.granted) {
+      onStatus("Voice permission denied");
+      return;
+    }
+    activeRef.current = true;
+    audioUriRef.current = "";
+    lastTranscribedUriRef.current = "";
+    setMode("recording");
+    try {
+      ExpoSpeechRecognitionModule.start({
+        lang: "zh-CN",
+        interimResults: false,
+        maxAlternatives: 1,
+        continuous: false,
+        addsPunctuation: true,
+        contextualStrings: [...contextualStrings],
+        recordingOptions: {
+          persist: true,
+          outputFileName: `cjmux-voice-${Date.now()}.wav`,
+          outputSampleRate: 16000,
+          outputEncoding: "pcmFormatInt16",
+        },
+      });
+    } catch (error) {
+      activeRef.current = false;
+      audioUriRef.current = "";
+      setMode("idle");
+      onStatus(error instanceof Error ? `Voice failed: ${error.message}` : `Voice failed: ${String(error)}`);
+    }
+  }, [api, contextualStrings, machineId, onStatus, scopeKey, setMode]);
+
+  return {
+    active: mode !== "idle",
+    recording: mode === "recording",
+    transcribing: mode === "transcribing",
+    toggle,
+  };
+}
+
 function TerminalKeyboardSheet({
   visible,
   disabled,
@@ -2173,13 +2434,48 @@ function PaneComposer({
   const iconColor = controlDisabled ? theme.colors.textMuted : theme.colors.text;
   const activeIconColor = theme.colors.accent;
   const showClear = expanded && Boolean(onClear);
+  const snippets = useSnippets(showShortcuts);
+  const updateSnippets = useUpdateSnippets();
+  const resetSnippets = useResetSnippets();
+  const [snippetSheetVisible, setSnippetSheetVisible] = React.useState(false);
+  const [snippetDraftItems, setSnippetDraftItems] = React.useState<UserSnippetItem[]>([]);
+  const [snippetNewText, setSnippetNewText] = React.useState("");
+  const snippetItems = React.useMemo(() => {
+    const loaded = cleanSnippetItems(snippets.data?.items);
+    return loaded.length > 0 ? loaded : FALLBACK_SNIPPETS;
+  }, [snippets.data?.items]);
+
+  const openSnippetManager = React.useCallback(() => {
+    setSnippetDraftItems(snippetItems);
+    setSnippetNewText("");
+    setSnippetSheetVisible(true);
+  }, [snippetItems]);
+
+  const saveSnippetDraft = React.useCallback(async () => {
+    const next = cleanSnippetItems(snippetDraftItems);
+    await updateSnippets.mutateAsync(next);
+    setSnippetSheetVisible(false);
+  }, [snippetDraftItems, updateSnippets]);
+
+  const addSnippetDraft = React.useCallback(() => {
+    const text = snippetNewText.trim();
+    if (!text) return;
+    setSnippetDraftItems((current) => cleanSnippetItems([...current, { text }]));
+    setSnippetNewText("");
+  }, [snippetNewText]);
+
+  const resetSnippetDraft = React.useCallback(async () => {
+    const result = await resetSnippets.mutateAsync();
+    setSnippetDraftItems(cleanSnippetItems(result.items));
+    setSnippetNewText("");
+  }, [resetSnippets]);
 
   const voiceButton = (
     <Pressable
       accessibilityLabel={recognizing ? "Stop voice input" : "Start voice input"}
       style={[
-        expanded ? styles.paneComposerToolButton : styles.paneComposerIconButton,
-        recognizing ? (expanded ? styles.paneComposerToolButtonActive : styles.paneComposerIconButtonActive) : null,
+        expanded ? styles.paneComposerInlineButton : styles.paneComposerIconButton,
+        recognizing ? (expanded ? styles.paneComposerInlineButtonActive : styles.paneComposerIconButtonActive) : null,
         controlDisabled ? styles.disabledButton : null,
       ]}
       disabled={controlDisabled}
@@ -2194,24 +2490,17 @@ function PaneComposer({
       ) : (
         <Mic size={16} color={iconColor} />
       )}
-      {expanded && recognizing ? <VoiceWaveform /> : null}
-      {expanded ? (
-        <Text style={[styles.paneComposerToolButtonText, recognizing ? styles.paneComposerToolButtonTextActive : null]}>
-          {recognizing ? "Stop" : "Voice"}
-        </Text>
-      ) : null}
     </Pressable>
   );
 
   const keysButton = (
     <Pressable
       accessibilityLabel="Open terminal keys"
-      style={[expanded ? styles.paneComposerToolButton : styles.paneComposerIconButton, controlDisabled ? styles.disabledButton : null]}
+      style={[expanded ? styles.paneComposerInlineButton : styles.paneComposerIconButton, controlDisabled ? styles.disabledButton : null]}
       disabled={controlDisabled}
       onPress={onOpenKeys}
     >
       <Terminal size={16} color={iconColor} />
-      {expanded ? <Text style={styles.paneComposerToolButtonText}>Keys</Text> : null}
     </Pressable>
   );
 
@@ -2219,12 +2508,11 @@ function PaneComposer({
     expanded && showUpload ? (
       <Pressable
         accessibilityLabel="Upload image or file"
-        style={[styles.paneComposerToolButton, uploadBusy ? styles.disabledButton : null]}
+        style={[styles.paneComposerInlineButton, uploadBusy ? styles.disabledButton : null]}
         disabled={disabled || uploadBusy}
         onPress={onOpenUpload}
       >
         {uploadBusy ? <ActivityIndicator color={theme.colors.text} /> : <Upload size={16} color={iconColor} />}
-        <Text style={styles.paneComposerToolButtonText}>Upload</Text>
       </Pressable>
     ) : null;
 
@@ -2241,7 +2529,11 @@ function PaneComposer({
       submitBehavior="submit"
       onSubmitEditing={onSend}
       onKeyPress={onKeyPress}
-      style={[styles.paneComposerInput, expanded ? styles.paneComposerInputExpanded : styles.paneComposerInputCompact]}
+      style={[
+        styles.paneComposerInput,
+        expanded ? styles.paneComposerInputExpanded : styles.paneComposerInputCompact,
+        expanded ? styles.paneComposerInputEmbedded : null,
+      ]}
       placeholder={placeholder}
       placeholderTextColor={theme.colors.textMuted}
     />
@@ -2251,7 +2543,7 @@ function PaneComposer({
     <Pressable
       accessibilityLabel="Send terminal input"
       style={[
-        expanded ? styles.paneComposerSubmitButton : styles.paneComposerSendButton,
+        expanded ? styles.paneComposerInlineSendButton : styles.paneComposerSendButton,
         sendIsDisabled ? styles.disabledButton : null,
       ]}
       disabled={sendIsDisabled}
@@ -2260,10 +2552,7 @@ function PaneComposer({
       {sendBusy || keyBusy ? (
         <ActivityIndicator color={theme.colors.surfaceRaised} />
       ) : expanded ? (
-        <>
-          <Send size={15} color={theme.colors.surfaceRaised} />
-          <Text style={styles.paneComposerSubmitText}>Send</Text>
-        </>
+        <Send size={16} color={theme.colors.surfaceRaised} />
       ) : (
         <Send size={17} color={theme.colors.surfaceRaised} />
       )}
@@ -2273,45 +2562,66 @@ function PaneComposer({
   return (
     <View style={styles.paneComposer}>
       {showShortcuts ? (
-        <View style={styles.shortcutRow}>
-          {PROMPT_SHORTCUTS.map((shortcut) => (
-            <Pressable
-              key={shortcut.label}
-              style={styles.shortcutChip}
-              disabled={disabled}
-              onPress={() => {
-                onShortcut?.(shortcut.text);
-                void Haptics.selectionAsync();
-              }}
-            >
-              <Text style={styles.shortcutText}>{shortcut.label}</Text>
-            </Pressable>
-          ))}
+        <View style={styles.snippetBar}>
+          <ScrollView
+            horizontal
+            style={styles.snippetScroll}
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.snippetScrollContent}
+          >
+            {snippetItems.map((shortcut, index) => (
+              <Pressable
+                key={`${shortcut.text}-${index}`}
+                style={styles.shortcutChip}
+                disabled={disabled}
+                onPress={() => {
+                  onShortcut?.(shortcut.text);
+                  void Haptics.selectionAsync();
+                }}
+              >
+                <Text style={styles.shortcutText} numberOfLines={1}>
+                  {shortcut.text}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
           {showClear ? (
             <Pressable
-              style={[styles.shortcutChip, value.length === 0 ? styles.disabledButton : null]}
+              style={[styles.snippetIconButton, value.length === 0 ? styles.disabledButton : null]}
               disabled={disabled || value.length === 0}
               onPress={() => {
                 onClear?.();
                 void Haptics.selectionAsync();
               }}
             >
-              <Text style={styles.shortcutText}>Clear</Text>
+              <X size={15} color={value.length === 0 ? theme.colors.textMuted : theme.colors.text} />
             </Pressable>
           ) : null}
+          <Pressable
+            accessibilityLabel="Manage shortcuts"
+            style={[styles.snippetIconButton, snippets.isFetching ? styles.disabledButton : null]}
+            disabled={disabled}
+            onPress={openSnippetManager}
+          >
+            <ListPlus size={16} color={theme.colors.text} />
+          </Pressable>
         </View>
       ) : null}
       {expanded ? (
         <>
-          {input}
-          <View style={styles.paneComposerToolRow}>
-            {voiceButton}
-            {uploadButton}
-            {keysButton}
-            <Text style={styles.paneComposerStatus} numberOfLines={1}>
-              {status || error || ""}
-            </Text>
+          <View style={styles.paneComposerInputShell}>
+            {input}
+            <View style={styles.paneComposerInlineActions}>
+              {uploadButton}
+              {voiceButton}
+              {keysButton}
+              {sendButton}
+            </View>
           </View>
+          <Text style={styles.paneComposerStatus} numberOfLines={1}>
+            {status || error || ""}
+          </Text>
           {error ? (
             <View style={styles.retryRow}>
               <Text style={styles.retryErrorText} numberOfLines={2}>
@@ -2327,7 +2637,6 @@ function PaneComposer({
               </Pressable>
             </View>
           ) : null}
-          {sendButton}
         </>
       ) : (
         <View style={styles.paneComposerCompactRow}>
@@ -2337,6 +2646,123 @@ function PaneComposer({
           {sendButton}
         </View>
       )}
+      <SheetModal visible={snippetSheetVisible} title="Shortcuts" onClose={() => setSnippetSheetVisible(false)}>
+        {snippetDraftItems.map((item, index) => (
+          <View key={`snippet-${index}`} style={styles.snippetEditRow}>
+            <Pressable
+              accessibilityLabel="Insert shortcut"
+              style={styles.snippetRowIconButton}
+              disabled={!item.text.trim()}
+              onPress={() => {
+                onShortcut?.(item.text);
+                setSnippetSheetVisible(false);
+              }}
+            >
+              <Send size={14} color={theme.colors.text} />
+            </Pressable>
+            <TextInput
+              value={item.text}
+              onChangeText={(text) => {
+                setSnippetDraftItems((current) =>
+                  current.map((entry, entryIndex) => (entryIndex === index ? { text } : entry)),
+                );
+              }}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.snippetRowInput}
+            />
+            <Pressable
+              accessibilityLabel="Move shortcut up"
+              style={[styles.snippetRowIconButton, index === 0 ? styles.disabledButton : null]}
+              disabled={index === 0}
+              onPress={() => {
+                setSnippetDraftItems((current) => {
+                  const next = current.slice();
+                  [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                  return next;
+                });
+              }}
+            >
+              <ArrowUp size={14} color={index === 0 ? theme.colors.textMuted : theme.colors.text} />
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Move shortcut down"
+              style={[styles.snippetRowIconButton, index === snippetDraftItems.length - 1 ? styles.disabledButton : null]}
+              disabled={index === snippetDraftItems.length - 1}
+              onPress={() => {
+                setSnippetDraftItems((current) => {
+                  const next = current.slice();
+                  [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                  return next;
+                });
+              }}
+            >
+              <ArrowDown size={14} color={index === snippetDraftItems.length - 1 ? theme.colors.textMuted : theme.colors.text} />
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Delete shortcut"
+              style={styles.snippetRowIconButton}
+              onPress={() => {
+                setSnippetDraftItems((current) => current.filter((_entry, entryIndex) => entryIndex !== index));
+              }}
+            >
+              <Trash2 size={14} color={theme.colors.danger} />
+            </Pressable>
+          </View>
+        ))}
+        <View style={styles.snippetAddRow}>
+          <TextInput
+            value={snippetNewText}
+            onChangeText={setSnippetNewText}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="done"
+            onSubmitEditing={addSnippetDraft}
+            style={styles.snippetAddInput}
+            placeholder="New shortcut"
+            placeholderTextColor={theme.colors.textMuted}
+          />
+          <Pressable
+            accessibilityLabel="Add shortcut"
+            style={[styles.snippetRowIconButton, !snippetNewText.trim() ? styles.disabledButton : null]}
+            disabled={!snippetNewText.trim()}
+            onPress={addSnippetDraft}
+          >
+            <Plus size={15} color={snippetNewText.trim() ? theme.colors.text : theme.colors.textMuted} />
+          </Pressable>
+        </View>
+        <View style={styles.snippetSheetActions}>
+          <Pressable
+            style={[styles.settingsSecondaryButton, resetSnippets.isPending ? styles.disabledButton : null]}
+            disabled={resetSnippets.isPending || updateSnippets.isPending}
+            onPress={() => {
+              resetSnippetDraft().catch(() => {});
+            }}
+          >
+            <RefreshCcw size={14} color={theme.colors.text} />
+            <Text style={styles.secondaryButtonText}>Reset</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.settingsPrimaryButton, updateSnippets.isPending ? styles.disabledButton : null]}
+            disabled={updateSnippets.isPending || resetSnippets.isPending}
+            onPress={() => {
+              saveSnippetDraft().catch(() => {});
+            }}
+          >
+            {updateSnippets.isPending ? (
+              <ActivityIndicator color={theme.colors.surfaceRaised} />
+            ) : (
+              <Check size={14} color={theme.colors.surfaceRaised} />
+            )}
+            <Text style={styles.primaryButtonText}>Save</Text>
+          </Pressable>
+        </View>
+        {snippets.error || updateSnippets.error || resetSnippets.error ? (
+          <Text style={styles.errorText} numberOfLines={2}>
+            {snippets.error?.message || updateSnippets.error?.message || resetSnippets.error?.message}
+          </Text>
+        ) : null}
+      </SheetModal>
     </View>
   );
 }
@@ -2351,11 +2777,11 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
   const [uploading, setUploading] = React.useState(false);
   const [uploadPickerVisible, setUploadPickerVisible] = React.useState(false);
   const [keyboardVisible, setKeyboardVisible] = React.useState(false);
-  const [recognizing, setRecognizing] = React.useState(false);
   const [status, setStatus] = React.useState("");
   const [sendError, setSendError] = React.useState("");
   const [retryAction, setRetryAction] = React.useState<SendRetryAction | null>(null);
-  const voiceResultRef = React.useRef("");
+  const targetScopeKey = target ? agentCardKey(target) : "";
+  const targetMachineId = target ? agentMachineKey(target) : "";
   const targetWindowName = target?.windowName?.trim() || "";
   const targetSessionName = target?.sessionName?.trim() || "";
   const sendSheetTitle = targetWindowName || targetSessionName || "Send to pane";
@@ -2394,55 +2820,13 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
     });
   }, [clearSendFailure]);
 
-  useSpeechRecognitionEvent("start", () => {
-    setRecognizing(true);
-    setStatus("Listening...");
+  const voiceInput = useServerVoiceInput({
+    scopeKey: targetScopeKey,
+    machineId: targetMachineId,
+    onText: appendText,
+    onStatus: setStatus,
+    contextualStrings: VOICE_CONTEXTUAL_STRINGS,
   });
-
-  useSpeechRecognitionEvent("end", () => {
-    setRecognizing(false);
-  });
-
-  useSpeechRecognitionEvent("result", (event) => {
-    if (!event.isFinal) return;
-    const transcript = event.results[0]?.transcript.trim();
-    if (!transcript || transcript === voiceResultRef.current) return;
-    voiceResultRef.current = transcript;
-    appendText(transcript);
-    setStatus("Voice added");
-    void Haptics.selectionAsync();
-  });
-
-  useSpeechRecognitionEvent("error", (event) => {
-    setRecognizing(false);
-    setStatus(event.message || `Voice input failed: ${event.error}`);
-  });
-
-  const toggleVoiceInput = React.useCallback(async () => {
-    if (recognizing) {
-      ExpoSpeechRecognitionModule.stop();
-      return;
-    }
-    setStatus("");
-    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
-      setStatus("Voice input is not available on this device");
-      return;
-    }
-    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-    if (!permission.granted) {
-      setStatus("Voice permission denied");
-      return;
-    }
-    voiceResultRef.current = "";
-    ExpoSpeechRecognitionModule.start({
-      lang: "zh-CN",
-      interimResults: false,
-      maxAlternatives: 1,
-      continuous: false,
-      addsPunctuation: true,
-      contextualStrings: ["AMUX", "Codex", "Claude", "tmux", "terminal", "session", "agent"],
-    });
-  }, [recognizing]);
 
   const uploadAssets = React.useCallback(async (
     assets: Array<{ uri: string; name?: string | null; mimeType?: string | null }>,
@@ -2600,8 +2984,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
         }}
         onSend={sendCurrentText}
         onToggleVoice={() => {
-          toggleVoiceInput().catch((error) => {
-            setRecognizing(false);
+          voiceInput.toggle().catch((error) => {
             setStatus(error instanceof Error ? error.message : String(error));
           });
         }}
@@ -2612,10 +2995,9 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           setText("");
           setStatus("");
           clearSendFailure();
-          voiceResultRef.current = "";
         }}
         onRetry={retrySend}
-        recognizing={recognizing}
+        recognizing={voiceInput.active}
         disabled={!target}
         sendDisabled={!text.trim()}
         sendBusy={sendText.isPending}
@@ -2742,15 +3124,14 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const terminalRefreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const terminalSuppressChangeRef = React.useRef(false);
   const terminalSuppressChangeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const terminalVoiceActiveRef = React.useRef(false);
-  const terminalVoiceResultRef = React.useRef("");
   const [data, setData] = React.useState<WindowViewResponse | null>(null);
   const [terminalText, setTerminalText] = React.useState("");
   const [terminalInput, setTerminalInput] = React.useState("");
   const [terminalKeyboardVisible, setTerminalKeyboardVisible] = React.useState(false);
   const [terminalUploadPickerVisible, setTerminalUploadPickerVisible] = React.useState(false);
   const [terminalUploading, setTerminalUploading] = React.useState(false);
-  const [terminalRecognizing, setTerminalRecognizing] = React.useState(false);
+  const [terminalAutoRefresh, setTerminalAutoRefresh] = React.useState(true);
+  const [terminalFullscreen, setTerminalFullscreen] = React.useState(windowWidth >= 760);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -2770,12 +3151,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     setTerminalUploadPickerVisible(false);
     terminalInputRef.current = "";
     terminalSuppressChangeRef.current = false;
-    if (terminalVoiceActiveRef.current) {
-      ExpoSpeechRecognitionModule.stop();
-    }
-    setTerminalRecognizing(false);
-    terminalVoiceActiveRef.current = false;
-    terminalVoiceResultRef.current = "";
     setError("");
     setStatus("");
     if (!api || (!target?.windowId && !target?.paneId)) return;
@@ -2805,6 +3180,10 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   }, [api, target]);
 
   React.useEffect(() => {
+    if (target) setTerminalFullscreen(windowWidth >= 760);
+  }, [target, windowWidth]);
+
+  React.useEffect(() => {
     return () => {
       if (terminalRefreshTimerRef.current) clearTimeout(terminalRefreshTimerRef.current);
       if (terminalSuppressChangeTimerRef.current) clearTimeout(terminalSuppressChangeTimerRef.current);
@@ -2812,6 +3191,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   }, []);
 
   const machineId = target ? agentMachineKey(target) : "";
+  const terminalScopeKey = target ? agentCardKey(target) : "";
   const activePaneId = data?.capture?.paneId || data?.activePaneId || target?.paneId || "";
   const cwd =
     data?.panes?.find((pane) => pane.id === activePaneId)?.cwd ||
@@ -2915,7 +3295,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   );
 
   React.useEffect(() => {
-    if (!api || !target || !activePaneId) return;
+    if (!terminalAutoRefresh || !api || !target || !activePaneId) return;
     const intervalMs = target.status === "running" || target.waitingForInput
       ? TERMINAL_ACTIVE_REFRESH_MS
       : TERMINAL_IDLE_REFRESH_MS;
@@ -2929,7 +3309,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         });
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [activePaneId, api, refreshCapture, target]);
+  }, [activePaneId, api, refreshCapture, target, terminalAutoRefresh]);
 
   const terminalNodes = React.useMemo(() => renderAnsiText(terminalText, { selectable: true }), [terminalText]);
   const scrollPaneTailToEnd = React.useCallback((animated = false) => {
@@ -2939,8 +3319,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   }, []);
 
   React.useEffect(() => {
-    if (terminalText) scrollPaneTailToEnd(false);
-  }, [scrollPaneTailToEnd, terminalText]);
+    if (terminalAutoRefresh && terminalText) scrollPaneTailToEnd(false);
+  }, [scrollPaneTailToEnd, terminalAutoRefresh, terminalText]);
 
   const copyTerminalOutput = React.useCallback(async () => {
     await Clipboard.setStringAsync(terminalText || "");
@@ -2956,6 +3336,14 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
       return /\s$/.test(current) ? `${current}${next}` : `${current} ${next}`;
     });
   }, []);
+
+  const terminalVoiceInput = useServerVoiceInput({
+    scopeKey: terminalScopeKey,
+    machineId,
+    onText: appendTerminalInput,
+    onStatus: setStatus,
+    contextualStrings: VOICE_CONTEXTUAL_STRINGS,
+  });
 
   const uploadTerminalAssets = React.useCallback(async (
     assets: Array<{ uri: string; name?: string | null; mimeType?: string | null }>,
@@ -3035,65 +3423,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
       "file",
     );
   }, [uploadTerminalAssets]);
-
-  useSpeechRecognitionEvent("start", () => {
-    if (!terminalVoiceActiveRef.current) return;
-    setTerminalRecognizing(true);
-    setStatus("Listening...");
-  });
-
-  useSpeechRecognitionEvent("end", () => {
-    if (!terminalVoiceActiveRef.current) return;
-    terminalVoiceActiveRef.current = false;
-    setTerminalRecognizing(false);
-  });
-
-  useSpeechRecognitionEvent("result", (event) => {
-    if (!terminalVoiceActiveRef.current || !event.isFinal) return;
-    const transcript = event.results[0]?.transcript.trim();
-    if (!transcript || transcript === terminalVoiceResultRef.current) return;
-    terminalVoiceResultRef.current = transcript;
-    appendTerminalInput(transcript);
-    setStatus("Voice added");
-    void Haptics.selectionAsync();
-  });
-
-  useSpeechRecognitionEvent("error", (event) => {
-    if (!terminalVoiceActiveRef.current) return;
-    terminalVoiceActiveRef.current = false;
-    setTerminalRecognizing(false);
-    setStatus(event.message || `Voice input failed: ${event.error}`);
-  });
-
-  const toggleTerminalVoice = React.useCallback(async () => {
-    if (terminalRecognizing) {
-      terminalVoiceActiveRef.current = false;
-      ExpoSpeechRecognitionModule.stop();
-      setTerminalRecognizing(false);
-      setStatus("Voice stopped");
-      return;
-    }
-    setStatus("");
-    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
-      setStatus("Voice input is not available on this device");
-      return;
-    }
-    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-    if (!permission.granted) {
-      setStatus("Voice permission denied");
-      return;
-    }
-    terminalVoiceActiveRef.current = true;
-    terminalVoiceResultRef.current = "";
-    ExpoSpeechRecognitionModule.start({
-      lang: "zh-CN",
-      interimResults: false,
-      maxAlternatives: 1,
-      continuous: false,
-      addsPunctuation: true,
-      contextualStrings: ["CJMUX", "AMUX", "Codex", "Claude", "tmux", "terminal", "session", "agent"],
-    });
-  }, [terminalRecognizing]);
 
   const afterTerminalSend = React.useCallback(() => {
     setError("");
@@ -3180,7 +3509,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   );
 
   return (
-    <SheetModal visible={Boolean(target)} title="Terminal" onClose={onClose} tall wide fullscreenOnWide>
+    <SheetModal visible={Boolean(target)} title="Terminal" onClose={onClose} tall wide fullscreen={terminalFullscreen}>
       <View style={styles.terminalToolbar}>
         <View style={styles.terminalMetaBlock}>
           <Text style={styles.terminalTitleLine} numberOfLines={1}>
@@ -3200,6 +3529,34 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
             }}
           />
           <ActionButton
+            icon={
+              terminalAutoRefresh ? (
+                <CheckCircle size={15} color={theme.colors.accent} />
+              ) : (
+                <Circle size={15} color={theme.colors.textMuted} />
+              )
+            }
+            label={terminalAutoRefresh ? "Disable auto update" : "Enable auto update"}
+            active={terminalAutoRefresh}
+            onPress={() => {
+              setTerminalAutoRefresh((value) => !value);
+            }}
+          />
+          <ActionButton
+            icon={
+              terminalFullscreen ? (
+                <Minimize2 size={15} color={theme.colors.accent} />
+              ) : (
+                <Maximize2 size={15} color={theme.colors.text} />
+              )
+            }
+            label={terminalFullscreen ? "Exit fullscreen terminal" : "Fullscreen terminal"}
+            active={terminalFullscreen}
+            onPress={() => {
+              setTerminalFullscreen((value) => !value);
+            }}
+          />
+          <ActionButton
             icon={<Copy size={15} color={theme.colors.text} />}
             label="Copy terminal output"
             disabled={!terminalText}
@@ -3213,7 +3570,9 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
       <ScrollView
         ref={paneTailScrollRef}
         style={styles.terminalBox}
-        onContentSizeChange={() => scrollPaneTailToEnd(false)}
+        onContentSizeChange={() => {
+          if (terminalAutoRefresh) scrollPaneTailToEnd(false);
+        }}
       >
         <Text selectable style={styles.terminalText}>{terminalText ? terminalNodes : "No output."}</Text>
       </ScrollView>
@@ -3227,9 +3586,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         onKeyPress={handleTerminalKeyPress}
         onSend={() => sendTerminalInput({ submit: true })}
         onToggleVoice={() => {
-          toggleTerminalVoice().catch((err) => {
-            terminalVoiceActiveRef.current = false;
-            setTerminalRecognizing(false);
+          terminalVoiceInput.toggle().catch((err) => {
             setStatus(err instanceof Error ? err.message : String(err));
           });
         }}
@@ -3241,10 +3598,9 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           setStatus("");
           setError("");
           terminalInputRef.current = "";
-          terminalVoiceResultRef.current = "";
         }}
         onRetry={() => sendTerminalInput({ submit: true })}
-        recognizing={terminalRecognizing}
+        recognizing={terminalVoiceInput.active}
         disabled={!target}
         sendBusy={sendText.isPending}
         keyBusy={sendKey.isPending}
@@ -3310,12 +3666,14 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
 function ResponseModal({
   target,
   copied,
+  onReply,
   onCopy,
   onOpenFile,
   onClose,
 }: {
   target: AgentSession | null;
   copied: boolean;
+  onReply: (agent: AgentSession) => void;
   onCopy: (agent: AgentSession) => void;
   onOpenFile: (agent: AgentSession, path: string) => void;
   onClose: () => void;
@@ -3393,6 +3751,14 @@ function ResponseModal({
           {target ? agentTitle(target) : ""}
         </Text>
         <View style={styles.responseHeaderActions}>
+          <ActionButton
+            icon={<Send size={15} color={theme.colors.accent} />}
+            label="Reply to session"
+            disabled={!target}
+            onPress={() => {
+              if (target) onReply(target);
+            }}
+          />
           <ActionButton
             icon={
               pinArtifact.isPending ? (
@@ -4065,6 +4431,7 @@ function SheetModal({
   onClose,
   tall,
   wide,
+  fullscreen,
   fullscreenOnWide,
 }: {
   visible: boolean;
@@ -4073,6 +4440,7 @@ function SheetModal({
   onClose: () => void;
   tall?: boolean;
   wide?: boolean;
+  fullscreen?: boolean;
   fullscreenOnWide?: boolean;
 }) {
   const theme = useAppTheme();
@@ -4178,7 +4546,7 @@ function SheetModal({
   const keyboardAffectsSheet = !sheetIsWide || !tall;
   const keyboardOffset = visible && keyboardAffectsSheet ? keyboardHeight : 0;
   const keyboardGap = 0;
-  const fullscreenActive = Boolean(fullscreenOnWide && sheetIsWide);
+  const fullscreenActive = Boolean(fullscreen || (fullscreenOnWide && sheetIsWide));
   const availableSheetHeight = Math.max(
     220,
     windowHeight - keyboardOffset - keyboardGap - (fullscreenActive ? 0 : insets.top + 14),
@@ -4919,6 +5287,10 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     alignItems: "center",
     justifyContent: "center",
   },
+  actionButtonActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
   menuLayer: {
     flex: 1,
     alignItems: "flex-end",
@@ -5167,6 +5539,16 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     alignItems: "center",
     gap: 8,
   },
+  paneComposerInputShell: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 150,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    overflow: "hidden",
+  },
   paneComposerInput: {
     flex: 1,
     minWidth: 0,
@@ -5177,6 +5559,12 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     color: theme.colors.text,
     paddingHorizontal: 12,
     ...theme.typography.mono,
+  },
+  paneComposerInputEmbedded: {
+    borderWidth: 0,
+    borderRadius: 0,
+    backgroundColor: "transparent",
+    paddingBottom: 58,
   },
   paneComposerInputCompact: {
     height: 44,
@@ -5217,6 +5605,28 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     borderColor: theme.colors.accent,
     backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
   },
+  paneComposerInlineActions: {
+    position: "absolute",
+    right: 8,
+    bottom: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  paneComposerInlineButton: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  paneComposerInlineButtonActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
   paneComposerToolButtonText: {
     ...theme.typography.meta,
     color: theme.colors.text,
@@ -5233,6 +5643,14 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   paneComposerSendButton: {
     width: 44,
     height: 44,
+    borderRadius: theme.radii.lg,
+    backgroundColor: theme.colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  paneComposerInlineSendButton: {
+    width: 38,
+    height: 38,
     borderRadius: theme.radii.lg,
     backgroundColor: theme.colors.accent,
     alignItems: "center",
@@ -5261,8 +5679,26 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     flexWrap: "wrap",
     gap: 8,
   },
+  snippetBar: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  snippetScroll: {
+    flex: 1,
+    minWidth: 0,
+  },
+  snippetScrollContent: {
+    gap: 8,
+    alignItems: "center",
+    paddingRight: 2,
+  },
   shortcutChip: {
     minHeight: 34,
+    maxWidth: 180,
     paddingHorizontal: 12,
     borderRadius: theme.radii.full,
     borderWidth: 1,
@@ -5273,6 +5709,74 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   shortcutText: {
     ...theme.typography.meta,
     color: theme.colors.text,
+  },
+  snippetIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: theme.radii.full,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  snippetEditRow: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  snippetRowInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 42,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    color: theme.colors.text,
+    paddingHorizontal: 10,
+    ...theme.typography.body,
+  },
+  snippetRowIconButton: {
+    width: 38,
+    height: 38,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  snippetAddRow: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  snippetAddInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 42,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    color: theme.colors.text,
+    paddingHorizontal: 10,
+    ...theme.typography.body,
+  },
+  snippetSheetActions: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
   uploadChoiceButton: {
     width: "100%",

@@ -123,6 +123,17 @@ export interface PinArtifactResponse {
   persisted?: boolean;
 }
 
+export interface UserSnippetItem {
+  text: string;
+}
+
+export interface UserSnippetsResponse {
+  items: UserSnippetItem[];
+  defaults?: UserSnippetItem[];
+  customized?: boolean;
+  persisted?: boolean;
+}
+
 export interface AgentFileResponse {
   path: string;
   name: string;

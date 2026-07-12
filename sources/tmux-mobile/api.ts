@@ -11,6 +11,8 @@ import type {
   DeviceLoginStart,
   PaneCaptureResponse,
   PinsResponse,
+  UserSnippetItem,
+  UserSnippetsResponse,
   WindowViewResponse,
 } from "./types";
 
@@ -23,6 +25,11 @@ export interface UploadFileInput {
 export interface UploadFileResponse {
   path?: string;
   name?: string;
+}
+
+export interface TranscribeAudioResponse {
+  text?: string;
+  model?: string;
 }
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
@@ -207,6 +214,23 @@ export class TmuxMobileApi {
     });
   }
 
+  snippets(): Promise<UserSnippetsResponse> {
+    return this.request("/api/snippets");
+  }
+
+  updateSnippets(items: UserSnippetItem[]): Promise<UserSnippetsResponse> {
+    return this.request("/api/snippets", {
+      method: "PUT",
+      body: { items },
+    });
+  }
+
+  resetSnippets(): Promise<UserSnippetsResponse> {
+    return this.request("/api/snippets", {
+      method: "DELETE",
+    });
+  }
+
   file(machineId: string, paneId: string, path: string): Promise<AgentFileResponse> {
     const params = new URLSearchParams({ paneId, path });
     return this.request(`/api/file?${params.toString()}`, { machineId });
@@ -272,6 +296,22 @@ export class TmuxMobileApi {
       machineId,
       headers: {
         "content-type": file.type || "application/octet-stream",
+      },
+      body: base64ToArrayBuffer(base64),
+    });
+  }
+
+  async transcribeAudio(
+    machineId: string,
+    file: { uri: string; type?: string | null },
+  ): Promise<TranscribeAudioResponse> {
+    const base64 = await readAsStringAsync(file.uri, { encoding: EncodingType.Base64 });
+    return this.request<TranscribeAudioResponse>("/api/transcribe", {
+      method: "POST",
+      machineId,
+      headers: {
+        "content-type": file.type || "audio/wav",
+        "x-idempotency-key": `mobile-voice-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       },
       body: base64ToArrayBuffer(base64),
     });
