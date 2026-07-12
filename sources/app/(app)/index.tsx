@@ -21,7 +21,7 @@ import {
   useColorScheme,
   useWindowDimensions,
 } from "react-native";
-import type { StyleProp, TextStyle } from "react-native";
+import type { StyleProp, TextInputProps, TextStyle } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
@@ -183,14 +183,19 @@ type TerminalKeyEntry =
 const TERMINAL_KEYBOARD_KEYS: readonly TerminalKeyEntry[] = [
   { label: "Ent", key: "Enter" },
   { label: "Esc", key: "Escape" },
-  { label: "^C", key: "C-c", danger: true },
-  { label: "^Z", key: "C-z", danger: true },
-  { label: "fg", command: "fg" },
   { label: "Tab", key: "Tab" },
+  { label: "⇧Tab", key: "BTab" },
   { label: "↑", key: "Up" },
+  { label: "↓", key: "Down" },
+  { label: "←", key: "Left" },
+  { label: "→", key: "Right" },
   { label: "⌫", key: "BSpace" },
   { label: "⌫line", key: "C-u" },
-  { label: "↓", key: "Down" },
+  { label: "^C", key: "C-c", danger: true },
+  { label: "^D", key: "C-d", danger: true },
+  { label: "^Z", key: "C-z", danger: true },
+  { label: "q", key: "q" },
+  { label: "fg", command: "fg" },
 ] as const;
 const TERMINAL_INITIAL_LINES = 260;
 const TERMINAL_REFRESH_LINES = 320;
@@ -242,6 +247,8 @@ function terminalKeyFromNativeKey(rawKey: string): string {
 type SendRetryAction =
   | { kind: "text"; label: string }
   | { kind: "terminal"; label: string; entry: TerminalKeyEntry };
+
+type PaneComposerVariant = "compact" | "expanded";
 
 type AgentFileTarget = {
   agent: AgentSession;
@@ -744,6 +751,140 @@ function CommandCenterScreen() {
     void Haptics.selectionAsync();
   }, []);
 
+  const activeShortcutAgent = React.useMemo(() => {
+    if (agents.length === 0) return null;
+    const selectedKey = selectedAgent ? agentCardKey(selectedAgent) : "";
+    return agents.find((agent) => agentCardKey(agent) === selectedKey) || agents[0] || null;
+  }, [agents, selectedAgent]);
+
+  const moveSelectedAgent = React.useCallback(
+    (direction: "left" | "right" | "up" | "down") => {
+      if (agents.length === 0) return;
+      const selectedKey = activeShortcutAgent ? agentCardKey(activeShortcutAgent) : "";
+      const currentIndex = Math.max(0, agents.findIndex((agent) => agentCardKey(agent) === selectedKey));
+      const columns = Math.max(1, layout.listColumns);
+      const delta =
+        direction === "left"
+          ? -1
+          : direction === "right"
+            ? 1
+            : direction === "up"
+              ? -columns
+              : columns;
+      const nextIndex = Math.max(0, Math.min(agents.length - 1, currentIndex + delta));
+      setSelectedAgent(agents[nextIndex] || null);
+      void Haptics.selectionAsync();
+    },
+    [activeShortcutAgent, agents, layout.listColumns],
+  );
+
+  const modalOpen = Boolean(
+    sendTarget ||
+      renameTarget ||
+      viewTarget ||
+      responseTarget ||
+      fileTarget ||
+      transcriptTarget ||
+      startVisible ||
+      menuVisible ||
+      pinsVisible ||
+      settingsVisible,
+  );
+
+  const handleCommandCenterKeyDown = React.useCallback(
+    (event: unknown) => {
+      const e = event as {
+        preventDefault?: () => void;
+        nativeEvent?: {
+          key?: string;
+          ctrlKey?: boolean;
+          metaKey?: boolean;
+          altKey?: boolean;
+          shiftKey?: boolean;
+        };
+      };
+      const native = e.nativeEvent || {};
+      const key = String(native.key || "");
+      if (!key || native.ctrlKey || native.metaKey || native.altKey) return;
+
+      if (key === "Escape") {
+        if (menuVisible) setMenuVisible(false);
+        else if (pinsVisible) setPinsVisible(false);
+        else if (settingsVisible) setSettingsVisible(false);
+        else if (startVisible) setStartVisible(false);
+        else return;
+        e.preventDefault?.();
+        return;
+      }
+
+      if (modalOpen) return;
+
+      const directionForKey: Record<string, "left" | "right" | "up" | "down"> = {
+        ArrowLeft: "left",
+        h: "left",
+        ArrowRight: "right",
+        l: "right",
+        ArrowUp: "up",
+        k: "up",
+        ArrowDown: "down",
+        j: "down",
+      };
+      const direction = directionForKey[key] || directionForKey[key.toLowerCase()];
+      if (direction) {
+        e.preventDefault?.();
+        moveSelectedAgent(direction);
+        return;
+      }
+
+      const agent = activeShortcutAgent;
+      const lowered = key.toLowerCase();
+      if (!agent) return;
+      if (key === "Enter" || lowered === "o") {
+        e.preventDefault?.();
+        setSelectedAgent(agent);
+        setViewTarget(agent);
+      } else if (lowered === "r") {
+        e.preventDefault?.();
+        setSelectedAgent(agent);
+        setSendTarget(agent);
+      } else if (lowered === "f") {
+        e.preventDefault?.();
+        if (agent.lastAssistantText) {
+          setSelectedAgent(agent);
+          setResponseTarget(agent);
+        }
+      } else if (lowered === "t") {
+        e.preventDefault?.();
+        setSelectedAgent(agent);
+        setTranscriptTarget(agent);
+      } else if (lowered === "u") {
+        e.preventDefault?.();
+        refreshCommandCenter();
+      }
+    },
+    [
+      activeShortcutAgent,
+      menuVisible,
+      modalOpen,
+      moveSelectedAgent,
+      pinsVisible,
+      refreshCommandCenter,
+      settingsVisible,
+      startVisible,
+    ],
+  );
+
+  const commandCenterKeyboardProps = React.useMemo(
+    () =>
+      ({
+        focusable: true,
+        tabIndex: 0,
+        onKeyDownCapture: handleCommandCenterKeyDown,
+        onKeyDown: handleCommandCenterKeyDown,
+      }) as Record<string, unknown>,
+    [handleCommandCenterKeyDown],
+  );
+
   React.useEffect(() => {
     return () => {
       if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
@@ -784,7 +925,7 @@ function CommandCenterScreen() {
   }
 
   return withTheme(
-    <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+    <View {...commandCenterKeyboardProps} style={[styles.screen, { paddingTop: insets.top + 8 }]}>
       <StatusBar style={theme.dark ? "light" : "dark"} />
       <View style={styles.header}>
         <View style={styles.headerTitleBlock}>
@@ -1968,6 +2109,238 @@ function TerminalKeyboardSheet({
   );
 }
 
+function PaneComposer({
+  variant,
+  value,
+  onChangeText,
+  onSend,
+  onToggleVoice,
+  onOpenKeys,
+  onOpenUpload,
+  onShortcut,
+  onClear,
+  onRetry,
+  recognizing = false,
+  disabled = false,
+  sendDisabled = false,
+  sendBusy = false,
+  keyBusy = false,
+  uploadBusy = false,
+  showUpload = false,
+  showShortcuts = false,
+  autoFocus = false,
+  multiline,
+  placeholder,
+  status,
+  error,
+  retryLabel = "Retry",
+  retryDisabled = false,
+  onKeyPress,
+}: {
+  variant: PaneComposerVariant;
+  value: string;
+  onChangeText: (value: string) => void;
+  onSend: () => void;
+  onToggleVoice: () => void;
+  onOpenKeys: () => void;
+  onOpenUpload?: () => void;
+  onShortcut?: (value: string) => void;
+  onClear?: () => void;
+  onRetry?: () => void;
+  recognizing?: boolean;
+  disabled?: boolean;
+  sendDisabled?: boolean;
+  sendBusy?: boolean;
+  keyBusy?: boolean;
+  uploadBusy?: boolean;
+  showUpload?: boolean;
+  showShortcuts?: boolean;
+  autoFocus?: boolean;
+  multiline?: boolean;
+  placeholder: string;
+  status?: string;
+  error?: string;
+  retryLabel?: string;
+  retryDisabled?: boolean;
+  onKeyPress?: TextInputProps["onKeyPress"];
+}) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  const expanded = variant === "expanded";
+  const busy = sendBusy || keyBusy || uploadBusy;
+  const controlDisabled = disabled || busy;
+  const sendIsDisabled = disabled || sendDisabled || sendBusy || keyBusy;
+  const iconColor = controlDisabled ? theme.colors.textMuted : theme.colors.text;
+  const activeIconColor = theme.colors.accent;
+  const showClear = expanded && Boolean(onClear);
+
+  const voiceButton = (
+    <Pressable
+      accessibilityLabel={recognizing ? "Stop voice input" : "Start voice input"}
+      style={[
+        expanded ? styles.paneComposerToolButton : styles.paneComposerIconButton,
+        recognizing ? (expanded ? styles.paneComposerToolButtonActive : styles.paneComposerIconButtonActive) : null,
+        controlDisabled ? styles.disabledButton : null,
+      ]}
+      disabled={controlDisabled}
+      onPress={onToggleVoice}
+    >
+      {recognizing ? (
+        expanded ? (
+          <MicOff size={16} color={activeIconColor} />
+        ) : (
+          <VoiceWaveform />
+        )
+      ) : (
+        <Mic size={16} color={iconColor} />
+      )}
+      {expanded && recognizing ? <VoiceWaveform /> : null}
+      {expanded ? (
+        <Text style={[styles.paneComposerToolButtonText, recognizing ? styles.paneComposerToolButtonTextActive : null]}>
+          {recognizing ? "Stop" : "Voice"}
+        </Text>
+      ) : null}
+    </Pressable>
+  );
+
+  const keysButton = (
+    <Pressable
+      accessibilityLabel="Open terminal keys"
+      style={[expanded ? styles.paneComposerToolButton : styles.paneComposerIconButton, controlDisabled ? styles.disabledButton : null]}
+      disabled={controlDisabled}
+      onPress={onOpenKeys}
+    >
+      <Terminal size={16} color={iconColor} />
+      {expanded ? <Text style={styles.paneComposerToolButtonText}>Keys</Text> : null}
+    </Pressable>
+  );
+
+  const uploadButton =
+    expanded && showUpload ? (
+      <Pressable
+        accessibilityLabel="Upload image or file"
+        style={[styles.paneComposerToolButton, uploadBusy ? styles.disabledButton : null]}
+        disabled={disabled || uploadBusy}
+        onPress={onOpenUpload}
+      >
+        {uploadBusy ? <ActivityIndicator color={theme.colors.text} /> : <Upload size={16} color={iconColor} />}
+        <Text style={styles.paneComposerToolButtonText}>Upload</Text>
+      </Pressable>
+    ) : null;
+
+  const input = (
+    <TextInput
+      value={value}
+      onChangeText={onChangeText}
+      multiline={multiline ?? expanded}
+      autoFocus={autoFocus}
+      autoCapitalize="none"
+      autoCorrect={false}
+      returnKeyType="send"
+      showSoftInputOnFocus
+      submitBehavior="submit"
+      onSubmitEditing={onSend}
+      onKeyPress={onKeyPress}
+      style={[styles.paneComposerInput, expanded ? styles.paneComposerInputExpanded : styles.paneComposerInputCompact]}
+      placeholder={placeholder}
+      placeholderTextColor={theme.colors.textMuted}
+    />
+  );
+
+  const sendButton = (
+    <Pressable
+      accessibilityLabel="Send terminal input"
+      style={[
+        expanded ? styles.paneComposerSubmitButton : styles.paneComposerSendButton,
+        sendIsDisabled ? styles.disabledButton : null,
+      ]}
+      disabled={sendIsDisabled}
+      onPress={onSend}
+    >
+      {sendBusy || keyBusy ? (
+        <ActivityIndicator color={theme.colors.surfaceRaised} />
+      ) : expanded ? (
+        <>
+          <Send size={15} color={theme.colors.surfaceRaised} />
+          <Text style={styles.paneComposerSubmitText}>Send</Text>
+        </>
+      ) : (
+        <Send size={17} color={theme.colors.surfaceRaised} />
+      )}
+    </Pressable>
+  );
+
+  return (
+    <View style={styles.paneComposer}>
+      {showShortcuts ? (
+        <View style={styles.shortcutRow}>
+          {PROMPT_SHORTCUTS.map((shortcut) => (
+            <Pressable
+              key={shortcut.label}
+              style={styles.shortcutChip}
+              disabled={disabled}
+              onPress={() => {
+                onShortcut?.(shortcut.text);
+                void Haptics.selectionAsync();
+              }}
+            >
+              <Text style={styles.shortcutText}>{shortcut.label}</Text>
+            </Pressable>
+          ))}
+          {showClear ? (
+            <Pressable
+              style={[styles.shortcutChip, value.length === 0 ? styles.disabledButton : null]}
+              disabled={disabled || value.length === 0}
+              onPress={() => {
+                onClear?.();
+                void Haptics.selectionAsync();
+              }}
+            >
+              <Text style={styles.shortcutText}>Clear</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+      {expanded ? (
+        <>
+          {input}
+          <View style={styles.paneComposerToolRow}>
+            {voiceButton}
+            {uploadButton}
+            {keysButton}
+            <Text style={styles.paneComposerStatus} numberOfLines={1}>
+              {status || error || ""}
+            </Text>
+          </View>
+          {error ? (
+            <View style={styles.retryRow}>
+              <Text style={styles.retryErrorText} numberOfLines={2}>
+                {error}
+              </Text>
+              <Pressable
+                style={[styles.retryButton, retryDisabled ? styles.disabledButton : null]}
+                disabled={retryDisabled}
+                onPress={onRetry}
+              >
+                <RefreshCcw size={14} color={theme.colors.surfaceRaised} />
+                <Text style={styles.retryButtonText}>{retryLabel}</Text>
+              </Pressable>
+            </View>
+          ) : null}
+          {sendButton}
+        </>
+      ) : (
+        <View style={styles.paneComposerCompactRow}>
+          {voiceButton}
+          {keysButton}
+          {input}
+          {sendButton}
+        </View>
+      )}
+    </View>
+  );
+}
+
 function SendModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
@@ -2218,110 +2591,50 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
       <Text style={styles.sheetMeta} numberOfLines={2}>
         {sendSheetMeta}
       </Text>
-      <View style={styles.shortcutRow}>
-        {PROMPT_SHORTCUTS.map((shortcut) => (
-          <Pressable key={shortcut.label} style={styles.shortcutChip} onPress={() => appendText(shortcut.text)}>
-            <Text style={styles.shortcutText}>{shortcut.label}</Text>
-          </Pressable>
-        ))}
-        <Pressable
-          style={[styles.shortcutChip, text.length === 0 ? styles.disabledButton : null]}
-          disabled={text.length === 0}
-          onPress={() => {
-            setText("");
-            setStatus("");
-            clearSendFailure();
-            voiceResultRef.current = "";
-            void Haptics.selectionAsync();
-          }}
-        >
-          <Text style={styles.shortcutText}>Clear</Text>
-        </Pressable>
-      </View>
-      <TextInput
+      <PaneComposer
+        variant="expanded"
         value={text}
         onChangeText={(value) => {
           setText(value);
           clearSendFailure();
         }}
-        multiline
+        onSend={sendCurrentText}
+        onToggleVoice={() => {
+          toggleVoiceInput().catch((error) => {
+            setRecognizing(false);
+            setStatus(error instanceof Error ? error.message : String(error));
+          });
+        }}
+        onOpenKeys={() => setKeyboardVisible(true)}
+        onOpenUpload={() => setUploadPickerVisible(true)}
+        onShortcut={appendText}
+        onClear={() => {
+          setText("");
+          setStatus("");
+          clearSendFailure();
+          voiceResultRef.current = "";
+        }}
+        onRetry={retrySend}
+        recognizing={recognizing}
+        disabled={!target}
+        sendDisabled={!text.trim()}
+        sendBusy={sendText.isPending}
+        keyBusy={sendKey.isPending}
+        uploadBusy={uploading}
+        showUpload
+        showShortcuts
         autoFocus
-        returnKeyType="send"
-        submitBehavior="submit"
-        onSubmitEditing={sendCurrentText}
-        style={[styles.textArea, { minHeight: 132 }]}
         placeholder="Type a prompt, command, or note..."
-        placeholderTextColor={theme.colors.textMuted}
+        status={status || sendKey.error?.message || uploadFile.error?.message || ""}
+        error={sendError}
+        retryLabel={retryAction?.label || "Retry"}
+        retryDisabled={
+          !retryAction ||
+          sendText.isPending ||
+          sendKey.isPending ||
+          (retryAction.kind === "text" && !text.trim())
+        }
       />
-      <View style={styles.sendToolRow}>
-        <Pressable
-          style={[styles.toolButton, recognizing ? styles.toolButtonActive : null]}
-          disabled={!target}
-          onPress={() => {
-            toggleVoiceInput().catch((error) => {
-              setRecognizing(false);
-              setStatus(error instanceof Error ? error.message : String(error));
-            });
-          }}
-        >
-          {recognizing ? (
-            <MicOff size={16} color={theme.colors.accent} />
-          ) : (
-            <Mic size={16} color={theme.colors.text} />
-          )}
-          {recognizing ? <VoiceWaveform /> : null}
-          <Text style={[styles.toolButtonText, recognizing ? styles.toolButtonTextActive : null]}>
-            {recognizing ? "Stop" : "Voice"}
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.toolButton, uploading ? styles.disabledButton : null]}
-          disabled={uploading || !target}
-          onPress={() => {
-            setUploadPickerVisible(true);
-          }}
-        >
-          {uploading ? (
-            <ActivityIndicator color={theme.colors.text} />
-          ) : (
-            <Upload size={16} color={theme.colors.text} />
-          )}
-          <Text style={styles.toolButtonText}>Upload</Text>
-        </Pressable>
-        <Pressable
-          style={styles.toolButton}
-          disabled={!target || sendText.isPending || sendKey.isPending}
-          onPress={() => setKeyboardVisible(true)}
-        >
-          <Terminal size={16} color={theme.colors.text} />
-          <Text style={styles.toolButtonText}>Keys</Text>
-        </Pressable>
-        <Text style={styles.sendStatus} numberOfLines={1}>
-          {status || sendError || sendKey.error?.message || uploadFile.error?.message || ""}
-        </Text>
-      </View>
-      {sendError ? (
-        <View style={styles.retryRow}>
-          <Text style={styles.retryErrorText} numberOfLines={2}>
-            {sendError}
-          </Text>
-          <Pressable
-            style={[styles.retryButton, retryAction?.kind === "text" && !text.trim() ? styles.disabledButton : null]}
-            disabled={!retryAction || sendText.isPending || sendKey.isPending || (retryAction.kind === "text" && !text.trim())}
-            onPress={retrySend}
-          >
-            <RefreshCcw size={14} color={theme.colors.surfaceRaised} />
-            <Text style={styles.retryButtonText}>{retryAction?.label || "Retry"}</Text>
-          </Pressable>
-        </View>
-      ) : null}
-      <Pressable
-        style={[styles.primaryButton, sendText.isPending || !text.trim() ? styles.disabledButton : null]}
-        disabled={!target || sendText.isPending || !text.trim()}
-        onPress={sendCurrentText}
-      >
-        {sendText.isPending ? <ActivityIndicator color={theme.colors.surfaceRaised} /> : <Text style={styles.primaryButtonText}>Send</Text>}
-      </Pressable>
       <SheetModal visible={uploadPickerVisible} title="Upload" onClose={() => setUploadPickerVisible(false)}>
         <Pressable
           style={[styles.uploadChoiceButton, uploading ? styles.disabledButton : null]}
@@ -2421,6 +2734,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const api = useTmuxMobileApi();
   const sendText = useSendText();
   const sendKey = useSendKey();
+  const uploadFile = useUploadFile();
   const paneTailScrollRef = React.useRef<ScrollView | null>(null);
   const pollingRef = React.useRef(false);
   const terminalInputRef = React.useRef("");
@@ -2434,6 +2748,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const [terminalText, setTerminalText] = React.useState("");
   const [terminalInput, setTerminalInput] = React.useState("");
   const [terminalKeyboardVisible, setTerminalKeyboardVisible] = React.useState(false);
+  const [terminalUploadPickerVisible, setTerminalUploadPickerVisible] = React.useState(false);
+  const [terminalUploading, setTerminalUploading] = React.useState(false);
   const [terminalRecognizing, setTerminalRecognizing] = React.useState(false);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
@@ -2451,6 +2767,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     setTerminalText("");
     setTerminalInput("");
     setTerminalKeyboardVisible(false);
+    setTerminalUploadPickerVisible(false);
     terminalInputRef.current = "";
     terminalSuppressChangeRef.current = false;
     if (terminalVoiceActiveRef.current) {
@@ -2614,7 +2931,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     return () => clearInterval(timer);
   }, [activePaneId, api, refreshCapture, target]);
 
-  const terminalNodes = React.useMemo(() => renderAnsiText(terminalText), [terminalText]);
+  const terminalNodes = React.useMemo(() => renderAnsiText(terminalText, { selectable: true }), [terminalText]);
   const scrollPaneTailToEnd = React.useCallback((animated = false) => {
     requestAnimationFrame(() => {
       paneTailScrollRef.current?.scrollToEnd({ animated });
@@ -2639,6 +2956,85 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
       return /\s$/.test(current) ? `${current}${next}` : `${current} ${next}`;
     });
   }, []);
+
+  const uploadTerminalAssets = React.useCallback(async (
+    assets: Array<{ uri: string; name?: string | null; mimeType?: string | null }>,
+    label: string,
+  ) => {
+    if (!target || assets.length === 0) return;
+    setTerminalUploading(true);
+    setTerminalUploadPickerVisible(false);
+    setError("");
+    setStatus(assets.length === 1 ? `Uploading ${label}...` : `Uploading ${assets.length} ${label}s...`);
+    try {
+      let count = 0;
+      for (const asset of assets) {
+        const fallbackName = asset.uri.split("/").pop() || `upload-${Date.now()}`;
+        const uploaded = await uploadFile.mutateAsync({
+          agent: target,
+          file: {
+            uri: asset.uri,
+            name: asset.name || fallbackName,
+            type: asset.mimeType || "application/octet-stream",
+          },
+        });
+        if (uploaded.path) {
+          appendTerminalInput(uploaded.path);
+          count += 1;
+        }
+      }
+      setStatus(count === 1 ? `${label[0].toUpperCase()}${label.slice(1)} uploaded` : `${count} ${label}s uploaded`);
+      void Haptics.selectionAsync();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setStatus("Upload failed");
+      setError(message);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setTerminalUploading(false);
+    }
+  }, [appendTerminalInput, target, uploadFile]);
+
+  const pickTerminalImages = React.useCallback(async () => {
+    setStatus("");
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setStatus("Photos permission denied");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      quality: 1,
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    await uploadTerminalAssets(
+      result.assets.map((asset) => ({
+        uri: asset.uri,
+        name: asset.fileName || asset.uri.split("/").pop() || `image-${Date.now()}.jpg`,
+        mimeType: asset.mimeType || "image/jpeg",
+      })),
+      "image",
+    );
+  }, [uploadTerminalAssets]);
+
+  const pickTerminalFiles = React.useCallback(async () => {
+    setStatus("");
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: true,
+      type: "*/*",
+    });
+    if (result.canceled || result.assets.length === 0) return;
+    await uploadTerminalAssets(
+      result.assets.map((asset) => ({
+        uri: asset.uri,
+        name: asset.name || asset.uri.split("/").pop() || `upload-${Date.now()}`,
+        mimeType: asset.mimeType || "application/octet-stream",
+      })),
+      "file",
+    );
+  }, [uploadTerminalAssets]);
 
   useSpeechRecognitionEvent("start", () => {
     if (!terminalVoiceActiveRef.current) return;
@@ -2813,71 +3209,55 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           />
         </View>
       </View>
-      {status ? <Text style={styles.terminalStatusLine} numberOfLines={1}>{status}</Text> : null}
       {loading ? <ActivityIndicator /> : null}
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <ScrollView
         ref={paneTailScrollRef}
         style={styles.terminalBox}
         onContentSizeChange={() => scrollPaneTailToEnd(false)}
       >
-        <Text style={styles.terminalText}>{terminalText ? terminalNodes : "No output."}</Text>
+        <Text selectable style={styles.terminalText}>{terminalText ? terminalNodes : "No output."}</Text>
       </ScrollView>
-      <View style={styles.terminalComposer}>
-        <Pressable
-          accessibilityLabel={terminalRecognizing ? "Stop terminal voice input" : "Start terminal voice input"}
-          style={[styles.terminalVoiceButton, terminalRecognizing ? styles.terminalVoiceButtonActive : null]}
-          disabled={!target}
-          onPress={() => {
-            toggleTerminalVoice().catch((err) => {
-              terminalVoiceActiveRef.current = false;
-              setTerminalRecognizing(false);
-              setStatus(err instanceof Error ? err.message : String(err));
-            });
-          }}
-        >
-          {terminalRecognizing ? (
-            <VoiceWaveform />
-          ) : (
-            <Mic size={17} color={theme.colors.text} />
-          )}
-        </Pressable>
-        <Pressable
-          accessibilityLabel="Open terminal keys"
-          style={styles.terminalVoiceButton}
-          disabled={!target || sendText.isPending || sendKey.isPending}
-          onPress={() => setTerminalKeyboardVisible(true)}
-        >
-          <Terminal size={17} color={theme.colors.text} />
-        </Pressable>
-        <TextInput
-          value={terminalInput}
-          onChangeText={handleTerminalInputChange}
-          onKeyPress={handleTerminalKeyPress}
-          autoFocus={terminalAutoFocus}
-          autoCapitalize="none"
-          autoCorrect={false}
-          returnKeyType="send"
-          showSoftInputOnFocus
-          submitBehavior="submit"
-          onSubmitEditing={() => sendTerminalInput({ submit: true })}
-          style={styles.terminalInput}
-          placeholder="Type and press Enter"
-          placeholderTextColor={theme.colors.textMuted}
-        />
-        <Pressable
-          accessibilityLabel="Send terminal input"
-          style={[styles.terminalSendButton, sendText.isPending || sendKey.isPending ? styles.disabledButton : null]}
-          disabled={!target || sendText.isPending || sendKey.isPending}
-          onPress={() => sendTerminalInput({ submit: true })}
-        >
-          {sendText.isPending || sendKey.isPending ? (
-            <ActivityIndicator color={theme.colors.surfaceRaised} />
-          ) : (
-            <Send size={17} color={theme.colors.surfaceRaised} />
-          )}
-        </Pressable>
-      </View>
+      <PaneComposer
+        variant="expanded"
+        value={terminalInput}
+        onChangeText={(value) => {
+          handleTerminalInputChange(value);
+          setError("");
+        }}
+        onKeyPress={handleTerminalKeyPress}
+        onSend={() => sendTerminalInput({ submit: true })}
+        onToggleVoice={() => {
+          toggleTerminalVoice().catch((err) => {
+            terminalVoiceActiveRef.current = false;
+            setTerminalRecognizing(false);
+            setStatus(err instanceof Error ? err.message : String(err));
+          });
+        }}
+        onOpenKeys={() => setTerminalKeyboardVisible(true)}
+        onOpenUpload={() => setTerminalUploadPickerVisible(true)}
+        onShortcut={appendTerminalInput}
+        onClear={() => {
+          setTerminalInput("");
+          setStatus("");
+          setError("");
+          terminalInputRef.current = "";
+          terminalVoiceResultRef.current = "";
+        }}
+        onRetry={() => sendTerminalInput({ submit: true })}
+        recognizing={terminalRecognizing}
+        disabled={!target}
+        sendBusy={sendText.isPending}
+        keyBusy={sendKey.isPending}
+        uploadBusy={terminalUploading}
+        showUpload
+        showShortcuts
+        autoFocus={terminalAutoFocus}
+        placeholder="Type a prompt, command, or note..."
+        status={status || uploadFile.error?.message || ""}
+        error={error}
+        retryLabel="Retry send"
+        retryDisabled={!target || sendText.isPending || sendKey.isPending}
+      />
       <TerminalKeyboardSheet
         visible={terminalKeyboardVisible && Boolean(target)}
         disabled={!target || sendText.isPending || sendKey.isPending}
@@ -2885,6 +3265,44 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         onKey={sendTerminalKey}
         onShortcut={appendTerminalInput}
       />
+      <SheetModal visible={terminalUploadPickerVisible} title="Upload" onClose={() => setTerminalUploadPickerVisible(false)}>
+        <Pressable
+          style={[styles.uploadChoiceButton, terminalUploading ? styles.disabledButton : null]}
+          disabled={terminalUploading || !target}
+          onPress={() => {
+            pickTerminalImages().catch((err) => {
+              setTerminalUploadPickerVisible(false);
+              setStatus(err instanceof Error ? err.message : String(err));
+            });
+          }}
+        >
+          <View style={styles.uploadChoiceIcon}>
+            <ImagePlus size={20} color={theme.colors.text} />
+          </View>
+          <View style={styles.uploadChoiceTextBlock}>
+            <Text style={styles.uploadChoiceTitle}>Image</Text>
+            <Text style={styles.uploadChoiceSubtitle}>Choose photos from the library</Text>
+          </View>
+        </Pressable>
+        <Pressable
+          style={[styles.uploadChoiceButton, terminalUploading ? styles.disabledButton : null]}
+          disabled={terminalUploading || !target}
+          onPress={() => {
+            pickTerminalFiles().catch((err) => {
+              setTerminalUploadPickerVisible(false);
+              setStatus(err instanceof Error ? err.message : String(err));
+            });
+          }}
+        >
+          <View style={styles.uploadChoiceIcon}>
+            <FileText size={20} color={theme.colors.text} />
+          </View>
+          <View style={styles.uploadChoiceTextBlock}>
+            <Text style={styles.uploadChoiceTitle}>File</Text>
+            <Text style={styles.uploadChoiceSubtitle}>Choose documents or other files</Text>
+          </View>
+        </Pressable>
+      </SheetModal>
     </SheetModal>
   );
 }
@@ -4728,8 +5146,29 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     paddingVertical: 10,
     ...theme.typography.body,
   },
-  textArea: {
+  paneComposer: {
     width: "100%",
+    minWidth: 0,
+    gap: 10,
+  },
+  paneComposerCompactRow: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  paneComposerToolRow: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  paneComposerInput: {
+    flex: 1,
     minWidth: 0,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
@@ -4737,9 +5176,83 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     backgroundColor: theme.colors.surfaceRaised,
     color: theme.colors.text,
     paddingHorizontal: 12,
+    ...theme.typography.mono,
+  },
+  paneComposerInputCompact: {
+    height: 44,
+  },
+  paneComposerInputExpanded: {
+    width: "100%",
+    minHeight: 132,
     paddingVertical: 10,
     textAlignVertical: "top",
-    ...theme.typography.body,
+  },
+  paneComposerIconButton: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  paneComposerIconButtonActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
+  paneComposerToolButton: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  paneComposerToolButtonActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
+  paneComposerToolButtonText: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+  },
+  paneComposerToolButtonTextActive: {
+    color: theme.colors.accent,
+  },
+  paneComposerStatus: {
+    flex: 1,
+    minWidth: 0,
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  paneComposerSendButton: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radii.lg,
+    backgroundColor: theme.colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  paneComposerSubmitButton: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 44,
+    borderRadius: theme.radii.lg,
+    backgroundColor: theme.colors.accent,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  paneComposerSubmitText: {
+    ...theme.typography.section,
+    color: theme.colors.surfaceRaised,
   },
   shortcutRow: {
     width: "100%",
@@ -4760,36 +5273,6 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   shortcutText: {
     ...theme.typography.meta,
     color: theme.colors.text,
-  },
-  sendToolRow: {
-    width: "100%",
-    minWidth: 0,
-    minHeight: 38,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  toolButton: {
-    minHeight: 36,
-    paddingHorizontal: 12,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceRaised,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  toolButtonActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
-  },
-  toolButtonText: {
-    ...theme.typography.meta,
-    color: theme.colors.text,
-  },
-  toolButtonTextActive: {
-    color: theme.colors.accent,
   },
   uploadChoiceButton: {
     width: "100%",
@@ -4835,12 +5318,6 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     width: 3,
     height: 14,
     borderRadius: theme.radii.full,
-  },
-  sendStatus: {
-    flex: 1,
-    minWidth: 0,
-    ...theme.typography.meta,
-    color: theme.colors.textMuted,
   },
   retryRow: {
     width: "100%",
@@ -5152,48 +5629,6 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     minWidth: 0,
     ...theme.typography.mono,
     color: "#edece5",
-  },
-  terminalComposer: {
-    width: "100%",
-    minWidth: 0,
-    minHeight: 46,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  terminalInput: {
-    flex: 1,
-    minWidth: 0,
-    height: 44,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceRaised,
-    paddingHorizontal: 12,
-    ...theme.typography.mono,
-    color: theme.colors.text,
-  },
-  terminalVoiceButton: {
-    width: 44,
-    height: 44,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceRaised,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  terminalVoiceButtonActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
-  },
-  terminalSendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: theme.radii.lg,
-    backgroundColor: theme.colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
   },
   transcriptBox: {
     flex: 1,

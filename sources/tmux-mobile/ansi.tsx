@@ -152,7 +152,7 @@ export function stripUnsupportedAnsi(text: string): string {
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1A\x1C-\x1F\x7F]/g, "");
 }
 
-export function renderAnsiText(text: string): React.ReactNode[] {
+export function renderAnsiText(text: string, options: { selectable?: boolean } = {}): React.ReactNode[] {
   const input = String(text || "");
   const sgr = /\x1B\[([0-9;:]*)m/g;
   const state = freshAnsiState();
@@ -165,7 +165,7 @@ export function renderAnsiText(text: string): React.ReactNode[] {
     const clean = stripUnsupportedAnsi(chunk);
     if (!clean) return;
     const style = ansiTextStyle(state);
-    nodes.push(style ? <Text key={`ansi-${index}`} style={style}>{clean}</Text> : clean);
+    nodes.push(style ? <Text key={`ansi-${index}`} selectable={options.selectable} style={style}>{clean}</Text> : clean);
     index += 1;
   };
 
