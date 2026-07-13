@@ -164,6 +164,13 @@ export class TmuxMobileApi {
     return this.request("/api/runtime");
   }
 
+  browserHandoff(returnTo: string): Promise<{ handoffUrl: string; expiresIn?: number }> {
+    return this.request("/auth/browser-handoff", {
+      method: "POST",
+      body: { returnTo },
+    });
+  }
+
   commandCenter(machineId?: string): Promise<CommandCenterResponse> {
     return this.request("/api/command-center", { machineId });
   }

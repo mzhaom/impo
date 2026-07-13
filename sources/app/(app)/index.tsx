@@ -75,6 +75,7 @@ import {
   X,
 } from "lucide-react-native";
 import { useQueryClient } from "@tanstack/react-query";
+import type { TmuxMobileApi } from "@/tmux-mobile/api";
 import { useTmuxMobileApi, useTmuxMobileAuth } from "@/tmux-mobile/auth";
 import { renderAnsiText } from "@/tmux-mobile/ansi";
 import {
@@ -137,6 +138,13 @@ const EMPTY_AGENTS: AgentSession[] = [];
 const THEME_MODE_KEY = "tmux-mobile.theme-mode";
 const MACHINE_CHIP_READ_AT_KEY = "tmux-mobile.machine-chip-read-at";
 const MACHINE_CHIP_READ_GRACE_MS = 5_000;
+const CONTROLLER_BROWSER_HANDOFF_PATHS = new Set([
+  "/pin",
+  "/api/pin",
+  "/api/file-view",
+  "/api/file-page",
+  "/api/file-raw",
+]);
 type ThemeMode = "light" | "dark";
 type MachineChipStats = {
   workingCount: number;
@@ -287,6 +295,9 @@ type AgentFileTarget = {
   agent: AgentSession;
   path: string;
 };
+type FilePreviewOrigin =
+  | { kind: "response"; agent: AgentSession }
+  | { kind: "transcript"; agent: AgentSession };
 type MarkdownPathRuleOptions = {
   agent?: AgentSession | null;
   basePath?: string;
@@ -428,6 +439,21 @@ function agentFileBrowserUrl(
   if (machineId) params.set("machineId", machineId);
   if (agent.mux) params.set("mux", agent.mux);
   return api.url(`${fileViewerEndpoint(filePath)}?${params.toString()}`).toString();
+}
+
+async function openAuthenticatedControllerUrl(api: TmuxMobileApi, targetUrl: string): Promise<void> {
+  const target = new URL(targetUrl, api.baseUrl);
+  if (
+    target.origin !== new URL(api.baseUrl).origin ||
+    !CONTROLLER_BROWSER_HANDOFF_PATHS.has(target.pathname)
+  ) {
+    await Linking.openURL(target.toString());
+    return;
+  }
+  const returnTo = `${target.pathname}${target.search}${target.hash}`;
+  const handoff = await api.browserHandoff(returnTo);
+  if (!handoff.handoffUrl) throw new Error("Controller did not return a browser handoff URL");
+  await Linking.openURL(api.url(handoff.handoffUrl).toString());
 }
 
 function createMarkdownPathRules(
@@ -582,6 +608,8 @@ function CommandCenterScreen() {
   const [responseTarget, setResponseTarget] = React.useState<AgentSession | null>(null);
   const [fileTarget, setFileTarget] = React.useState<AgentFileTarget | null>(null);
   const [transcriptTarget, setTranscriptTarget] = React.useState<AgentSession | null>(null);
+  const pendingFileTarget = React.useRef<AgentFileTarget | null>(null);
+  const filePreviewOrigin = React.useRef<FilePreviewOrigin | null>(null);
   const [startVisible, setStartVisible] = React.useState(false);
   const [menuVisible, setMenuVisible] = React.useState(false);
   const [pinsVisible, setPinsVisible] = React.useState(false);
@@ -732,10 +760,45 @@ function CommandCenterScreen() {
     void Haptics.selectionAsync();
   }, []);
 
-  const openAgentFile = React.useCallback((agent: AgentSession, path: string) => {
-    setSelectedAgent(agent);
-    setFileTarget({ agent, path });
-    void Haptics.selectionAsync();
+  const openAgentFile = React.useCallback(
+    (agent: AgentSession, path: string) => {
+      const nextTarget = { agent, path };
+      setSelectedAgent(agent);
+
+      // UIKit cannot reliably present a second React Native Modal while the
+      // response/transcript sheet is still being dismissed. Queue the file and
+      // let that sheet's onDismiss present it, keeping exactly one native modal
+      // on screen at a time.
+      if (responseTarget) {
+        pendingFileTarget.current = nextTarget;
+        filePreviewOrigin.current = { kind: "response", agent: responseTarget };
+        setResponseTarget(null);
+      } else if (transcriptTarget) {
+        pendingFileTarget.current = nextTarget;
+        filePreviewOrigin.current = { kind: "transcript", agent: transcriptTarget };
+        setTranscriptTarget(null);
+      } else {
+        filePreviewOrigin.current = null;
+        setFileTarget(nextTarget);
+      }
+      void Haptics.selectionAsync();
+    },
+    [responseTarget, transcriptTarget],
+  );
+
+  const presentPendingFile = React.useCallback(() => {
+    const pending = pendingFileTarget.current;
+    if (!pending) return;
+    pendingFileTarget.current = null;
+    setFileTarget(pending);
+  }, []);
+
+  const restoreFilePreviewOrigin = React.useCallback(() => {
+    const origin = filePreviewOrigin.current;
+    filePreviewOrigin.current = null;
+    if (!origin) return;
+    if (origin.kind === "response") setResponseTarget(origin.agent);
+    else setTranscriptTarget(origin.agent);
   }, []);
 
   const signOut = React.useCallback(() => {
@@ -1113,6 +1176,7 @@ function CommandCenterScreen() {
         }}
         onOpenFile={openAgentFile}
         onClose={() => setResponseTarget(null)}
+        onDismiss={presentPendingFile}
       />
       <FilePreviewModal
         target={fileTarget}
@@ -1120,11 +1184,13 @@ function CommandCenterScreen() {
           if (fileTarget) setFileTarget({ agent: fileTarget.agent, path });
         }}
         onClose={() => setFileTarget(null)}
+        onDismiss={restoreFilePreviewOrigin}
       />
       <TranscriptModal
         target={transcriptTarget}
         onOpenFile={openAgentFile}
         onClose={() => setTranscriptTarget(null)}
+        onDismiss={presentPendingFile}
       />
       <PinnedArtifactsModal visible={pinsVisible} onClose={() => setPinsVisible(false)} />
       <SettingsModal visible={settingsVisible} ota={otaUpdates} onClose={() => setSettingsVisible(false)} />
@@ -1761,6 +1827,7 @@ function ActionButton({
     <Pressable
       accessibilityLabel={label}
       disabled={disabled}
+      hitSlop={3}
       style={[styles.actionButton, active ? styles.actionButtonActive : null, disabled ? styles.disabledButton : null]}
       onPress={onPress}
     >
@@ -3670,6 +3737,7 @@ function ResponseModal({
   onCopy,
   onOpenFile,
   onClose,
+  onDismiss,
 }: {
   target: AgentSession | null;
   copied: boolean;
@@ -3677,6 +3745,7 @@ function ResponseModal({
   onCopy: (agent: AgentSession) => void;
   onOpenFile: (agent: AgentSession, path: string) => void;
   onClose: () => void;
+  onDismiss?: () => void;
 }) {
   const api = useTmuxMobileApi();
   const theme = useAppTheme();
@@ -3703,10 +3772,11 @@ function ResponseModal({
         openAgentFile(filePath);
         return false;
       }
-      Linking.openURL(url).catch(() => {});
+      if (api) openAuthenticatedControllerUrl(api, url).catch(() => {});
+      else Linking.openURL(url).catch(() => {});
       return false;
     },
-    [openAgentFile],
+    [api, openAgentFile],
   );
   React.useEffect(() => {
     setPinStatus("");
@@ -3745,7 +3815,14 @@ function ResponseModal({
   }, [api, pinArtifact, target, text]);
 
   return (
-    <SheetModal visible={Boolean(target)} title="Last response" onClose={onClose} tall wide>
+    <SheetModal
+      visible={Boolean(target)}
+      title="Last response"
+      onClose={onClose}
+      onDismiss={onDismiss}
+      tall
+      wide
+    >
       <View style={styles.responseSheetMetaRow}>
         <Text style={styles.sheetMeta} numberOfLines={1}>
           {target ? agentTitle(target) : ""}
@@ -3804,10 +3881,12 @@ function FilePreviewModal({
   target,
   onOpenPath,
   onClose,
+  onDismiss,
 }: {
   target: AgentFileTarget | null;
   onOpenPath: (path: string) => void;
   onClose: () => void;
+  onDismiss?: () => void;
 }) {
   const api = useTmuxMobileApi();
   const theme = useAppTheme();
@@ -3834,10 +3913,16 @@ function FilePreviewModal({
         onOpenPath(filePath);
         return false;
       }
-      Linking.openURL(url).catch(() => {});
+      if (api) {
+        openAuthenticatedControllerUrl(api, url).catch((err) => {
+          setStatus(err instanceof Error ? err.message : String(err));
+        });
+      } else {
+        Linking.openURL(url).catch(() => {});
+      }
       return false;
     },
-    [onOpenPath, target],
+    [api, onOpenPath, target],
   );
 
   React.useEffect(() => {
@@ -3882,9 +3967,12 @@ function FilePreviewModal({
 
   const openInBrowser = React.useCallback(() => {
     if (!api || !target) return;
-    Linking.openURL(agentFileBrowserUrl(api, target.agent, target.path)).catch((err) => {
-      setStatus(err instanceof Error ? err.message : String(err));
-    });
+    setStatus("Opening browser...");
+    openAuthenticatedControllerUrl(api, agentFileBrowserUrl(api, target.agent, target.path))
+      .then(() => setStatus(""))
+      .catch((err) => {
+        setStatus(err instanceof Error ? err.message : String(err));
+      });
   }, [api, target]);
 
   const pinCurrentFile = React.useCallback(() => {
@@ -3921,7 +4009,14 @@ function FilePreviewModal({
     .join(" · ");
 
   return (
-    <SheetModal visible={Boolean(target)} title="File" onClose={onClose} tall wide>
+    <SheetModal
+      visible={Boolean(target)}
+      title="File"
+      onClose={onClose}
+      onDismiss={onDismiss}
+      tall
+      wide
+    >
       <View style={styles.responseSheetMetaRow}>
         <Text style={styles.sheetMeta} numberOfLines={1}>
           {meta || target?.path || ""}
@@ -4001,16 +4096,21 @@ function TranscriptModal({
   target,
   onOpenFile,
   onClose,
+  onDismiss,
 }: {
   target: AgentSession | null;
   onOpenFile: (agent: AgentSession, path: string) => void;
   onClose: () => void;
+  onDismiss?: () => void;
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
   const api = useTmuxMobileApi();
+  const pinArtifact = usePinInlineArtifact();
   const [data, setData] = React.useState<AgentTranscriptResponse | null>(null);
   const [error, setError] = React.useState("");
+  const [pinStatus, setPinStatus] = React.useState("");
+  const [pinningTurn, setPinningTurn] = React.useState<number | null>(null);
   const [loading, setLoading] = React.useState(false);
   const markdownStyle = React.useMemo(() => createMarkdownStyles(theme), [theme]);
   const openTranscriptFile = React.useCallback(
@@ -4030,16 +4130,24 @@ function TranscriptModal({
         openTranscriptFile(filePath);
         return false;
       }
-      Linking.openURL(url).catch(() => {});
+      if (api) {
+        openAuthenticatedControllerUrl(api, url).catch((err) => {
+          setError(err instanceof Error ? err.message : String(err));
+        });
+      } else {
+        Linking.openURL(url).catch(() => {});
+      }
       return false;
     },
-    [openTranscriptFile],
+    [api, openTranscriptFile],
   );
 
   React.useEffect(() => {
     let cancelled = false;
     setData(null);
     setError("");
+    setPinStatus("");
+    setPinningTurn(null);
     if (!api || !target?.paneId) return;
     setLoading(true);
     api
@@ -4058,16 +4166,80 @@ function TranscriptModal({
     };
   }, [api, target]);
 
+  const pinTranscriptTurn = React.useCallback(
+    (turn: { role?: string; text?: string }, index: number) => {
+      const text = String(turn.text || "");
+      if (!api || !target || !text.trim() || pinArtifact.isPending) return;
+      const machineId = agentMachineKey(target);
+      const role = turn.role === "assistant" ? "assistant" : "user";
+      const suffix = `transcript-${String(index + 1).padStart(3, "0")}-${role}`;
+      const base = artifactSlugPart(target.windowName || target.kind || "response").slice(0, 60);
+      const nameBase = `${base}-${suffix}`;
+      const name = /\.[a-z0-9]+$/i.test(nameBase) ? nameBase : `${nameBase}.md`;
+      const sourceBase = artifactSlugPart(target.windowId || target.paneId || base, "window");
+      setPinningTurn(index);
+      setPinStatus(`Pinning ${role} turn ${index + 1}...`);
+      pinArtifact.mutate(
+        {
+          agent: target,
+          text,
+          name,
+          sourcePath: `agent-response/${machineId}/${sourceBase}/${suffix}`,
+        },
+        {
+          onSuccess: async (result) => {
+            const link = api.url(result.pin.shareUrl).toString();
+            try {
+              await Clipboard.setStringAsync(link);
+              setPinStatus(`Pinned turn ${index + 1}. Link copied.`);
+            } catch {
+              setPinStatus(link);
+            }
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          },
+          onError: (err) => {
+            setPinStatus(err instanceof Error ? err.message : String(err));
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          },
+          onSettled: () => setPinningTurn(null),
+        },
+      );
+    },
+    [api, pinArtifact, target],
+  );
+
   const turns = data?.result?.turns || [];
   return (
-    <SheetModal visible={Boolean(target)} title="Transcript" onClose={onClose} tall wide>
+    <SheetModal
+      visible={Boolean(target)}
+      title="Transcript"
+      onClose={onClose}
+      onDismiss={onDismiss}
+      tall
+      wide
+    >
       {loading ? <ActivityIndicator /> : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      {pinStatus ? <Text style={styles.sheetMeta} numberOfLines={2}>{pinStatus}</Text> : null}
       <ScrollView style={styles.transcriptBox}>
         {turns.length === 0 ? <Text style={styles.sheetMeta}>No structured transcript.</Text> : null}
         {turns.map((turn, index) => (
           <View key={`${index}-${turn.role}`} style={styles.turnRow}>
-            <Text style={styles.turnRole}>{turn.role || "turn"}</Text>
+            <View style={styles.turnHeaderRow}>
+              <Text style={styles.turnRole}>{turn.role || "turn"}</Text>
+              <ActionButton
+                icon={
+                  pinningTurn === index ? (
+                    <ActivityIndicator color={theme.colors.text} />
+                  ) : (
+                    <Pin size={15} color={theme.colors.text} />
+                  )
+                }
+                label={`Pin ${turn.role || "transcript"} turn ${index + 1} as artifact`}
+                disabled={!String(turn.text || "").trim() || pinArtifact.isPending}
+                onPress={() => pinTranscriptTurn(turn, index)}
+              />
+            </View>
             {turn.role === "assistant" ? (
               <Markdown
                 style={markdownStyle}
@@ -4117,11 +4289,15 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
   const openPin = React.useCallback(
     (pin: ArtifactPin) => {
       const url = absolutePinUrl(pin);
-      Linking.openURL(url).catch((error) => {
-        setStatus(error instanceof Error ? error.message : String(error));
-      });
+      if (!api) return;
+      setStatus("Opening artifact...");
+      openAuthenticatedControllerUrl(api, url)
+        .then(() => setStatus(""))
+        .catch((error) => {
+          setStatus(error instanceof Error ? error.message : String(error));
+        });
     },
-    [absolutePinUrl],
+    [absolutePinUrl, api],
   );
 
   const copyPinLink = React.useCallback(
@@ -4429,6 +4605,7 @@ function SheetModal({
   title,
   children,
   onClose,
+  onDismiss,
   tall,
   wide,
   fullscreen,
@@ -4438,6 +4615,7 @@ function SheetModal({
   title: string;
   children: React.ReactNode;
   onClose: () => void;
+  onDismiss?: () => void;
   tall?: boolean;
   wide?: boolean;
   fullscreen?: boolean;
@@ -4449,6 +4627,12 @@ function SheetModal({
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [keyboardHeight, setKeyboardHeight] = React.useState(0);
   const dragY = React.useRef(new Animated.Value(0)).current;
+  const wasVisible = React.useRef(visible);
+
+  React.useEffect(() => {
+    if (Platform.OS !== "ios" && wasVisible.current && !visible) onDismiss?.();
+    wasVisible.current = visible;
+  }, [onDismiss, visible]);
 
   React.useEffect(() => {
     if (visible) dragY.setValue(0);
@@ -4583,7 +4767,13 @@ function SheetModal({
   );
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={closeSheet}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onDismiss={onDismiss}
+      onRequestClose={closeSheet}
+    >
       <View style={styles.modalRoot}>
         <View style={styles.modalBackdrop}>
           <Pressable accessibilityLabel="Dismiss sheet" style={styles.modalBackdropTouch} onPress={closeSheet} />
@@ -6186,7 +6376,16 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     paddingVertical: 12,
     gap: 4,
   },
+  turnHeaderRow: {
+    minWidth: 0,
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
   turnRole: {
+    flex: 1,
     minWidth: 0,
     ...theme.typography.meta,
     color: theme.colors.accent,
