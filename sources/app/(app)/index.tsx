@@ -2448,6 +2448,7 @@ function PaneComposer({
   onShortcut,
   onClear,
   onRetry,
+  onExitFullscreen,
   recognizing = false,
   disabled = false,
   sendDisabled = false,
@@ -2463,6 +2464,7 @@ function PaneComposer({
   error,
   retryLabel = "Retry",
   retryDisabled = false,
+  reserveStatusSpace = true,
   onKeyPress,
 }: {
   variant: PaneComposerVariant;
@@ -2475,6 +2477,7 @@ function PaneComposer({
   onShortcut?: (value: string) => void;
   onClear?: () => void;
   onRetry?: () => void;
+  onExitFullscreen?: () => void;
   recognizing?: boolean;
   disabled?: boolean;
   sendDisabled?: boolean;
@@ -2490,6 +2493,7 @@ function PaneComposer({
   error?: string;
   retryLabel?: string;
   retryDisabled?: boolean;
+  reserveStatusSpace?: boolean;
   onKeyPress?: TextInputProps["onKeyPress"];
 }) {
   const theme = useAppTheme();
@@ -2580,6 +2584,17 @@ function PaneComposer({
         onPress={onOpenUpload}
       >
         {uploadBusy ? <ActivityIndicator color={theme.colors.text} /> : <Upload size={16} color={iconColor} />}
+      </Pressable>
+    ) : null;
+
+  const exitFullscreenButton =
+    expanded && onExitFullscreen ? (
+      <Pressable
+        accessibilityLabel="Exit fullscreen terminal"
+        style={styles.paneComposerFullscreenExitButton}
+        onPress={onExitFullscreen}
+      >
+        <Minimize2 size={17} color={theme.colors.text} />
       </Pressable>
     ) : null;
 
@@ -2680,15 +2695,18 @@ function PaneComposer({
           <View style={styles.paneComposerInputShell}>
             {input}
             <View style={styles.paneComposerInlineActions}>
+              {exitFullscreenButton}
               {uploadButton}
               {voiceButton}
               {keysButton}
               {sendButton}
             </View>
           </View>
-          <Text style={styles.paneComposerStatus} numberOfLines={1}>
-            {status || error || ""}
-          </Text>
+          {reserveStatusSpace || status || error ? (
+            <Text style={styles.paneComposerStatus} numberOfLines={1}>
+              {status || error || ""}
+            </Text>
+          ) : null}
           {error ? (
             <View style={styles.retryRow}>
               <Text style={styles.retryErrorText} numberOfLines={2}>
@@ -3204,6 +3222,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const [loading, setLoading] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
   const terminalAutoFocus = windowWidth >= 760;
+  const terminalTargetKey = target ? agentCardKey(target) : "";
+  const previousTerminalTargetKeyRef = React.useRef("");
 
   React.useEffect(() => {
     terminalInputRef.current = terminalInput;
@@ -3247,8 +3267,12 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   }, [api, target]);
 
   React.useEffect(() => {
-    if (target) setTerminalFullscreen(windowWidth >= 760);
-  }, [target, windowWidth]);
+    const previousTargetKey = previousTerminalTargetKeyRef.current;
+    previousTerminalTargetKeyRef.current = terminalTargetKey;
+    if (terminalTargetKey && terminalTargetKey !== previousTargetKey) {
+      setTerminalFullscreen(windowWidth >= 760);
+    }
+  }, [terminalTargetKey, windowWidth]);
 
   React.useEffect(() => {
     return () => {
@@ -3258,7 +3282,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   }, []);
 
   const machineId = target ? agentMachineKey(target) : "";
-  const terminalScopeKey = target ? agentCardKey(target) : "";
+  const terminalScopeKey = terminalTargetKey;
   const activePaneId = data?.capture?.paneId || data?.activePaneId || target?.paneId || "";
   const cwd =
     data?.panes?.find((pane) => pane.id === activePaneId)?.cwd ||
@@ -3575,9 +3599,29 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     [afterTerminalSend, sendKey, sendText, sendTerminalInput, target, terminalInput],
   );
 
+  const exitTerminalFullscreen = React.useCallback(() => {
+    Keyboard.dismiss();
+    setTerminalFullscreen(false);
+  }, []);
+
   return (
-    <SheetModal visible={Boolean(target)} title="Terminal" onClose={onClose} tall wide fullscreen={terminalFullscreen}>
-      <View style={styles.terminalToolbar}>
+    <SheetModal
+      visible={Boolean(target)}
+      title="Terminal"
+      onClose={() => {
+        if (terminalFullscreen) {
+          exitTerminalFullscreen();
+          return;
+        }
+        onClose();
+      }}
+      tall
+      wide
+      fullscreen={terminalFullscreen}
+      hideHeader={terminalFullscreen}
+    >
+      {target && terminalFullscreen ? <StatusBar hidden /> : null}
+      <View style={[styles.terminalToolbar, terminalFullscreen ? styles.terminalToolbarHidden : null]}>
         <View style={styles.terminalMetaBlock}>
           <Text style={styles.terminalTitleLine} numberOfLines={1}>
             {target ? agentTitle(target) : ""}
@@ -3640,6 +3684,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         onContentSizeChange={() => {
           if (terminalAutoRefresh) scrollPaneTailToEnd(false);
         }}
+        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+        keyboardShouldPersistTaps="handled"
       >
         <Text selectable style={styles.terminalText}>{terminalText ? terminalNodes : "No output."}</Text>
       </ScrollView>
@@ -3667,19 +3713,21 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           terminalInputRef.current = "";
         }}
         onRetry={() => sendTerminalInput({ submit: true })}
+        onExitFullscreen={terminalFullscreen ? exitTerminalFullscreen : undefined}
         recognizing={terminalVoiceInput.active}
         disabled={!target}
         sendBusy={sendText.isPending}
         keyBusy={sendKey.isPending}
         uploadBusy={terminalUploading}
         showUpload
-        showShortcuts
+        showShortcuts={!terminalFullscreen}
         autoFocus={terminalAutoFocus}
         placeholder="Type a prompt, command, or note..."
         status={status || uploadFile.error?.message || ""}
         error={error}
         retryLabel="Retry send"
         retryDisabled={!target || sendText.isPending || sendKey.isPending}
+        reserveStatusSpace={!terminalFullscreen}
       />
       <TerminalKeyboardSheet
         visible={terminalKeyboardVisible && Boolean(target)}
@@ -4610,6 +4658,7 @@ function SheetModal({
   wide,
   fullscreen,
   fullscreenOnWide,
+  hideHeader,
 }: {
   visible: boolean;
   title: string;
@@ -4620,6 +4669,7 @@ function SheetModal({
   wide?: boolean;
   fullscreen?: boolean;
   fullscreenOnWide?: boolean;
+  hideHeader?: boolean;
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
@@ -4741,7 +4791,9 @@ function SheetModal({
     height: fullscreenActive || tall ? maxSheetHeight : undefined,
     maxHeight: maxSheetHeight,
     marginBottom: fullscreenActive ? keyboardOffset + keyboardGap : keyboardOffset + keyboardGap,
-    paddingTop: fullscreenActive ? insets.top + 12 : undefined,
+    paddingTop: fullscreenActive ? insets.top + (hideHeader ? 0 : 12) : undefined,
+    paddingLeft: fullscreenActive && hideHeader ? insets.left + 12 : undefined,
+    paddingRight: fullscreenActive && hideHeader ? insets.right + 12 : undefined,
     paddingBottom: keyboardOffset > 0 ? 16 : insets.bottom + 16,
     borderTopLeftRadius: fullscreenActive ? 0 : undefined,
     borderTopRightRadius: fullscreenActive ? 0 : undefined,
@@ -4751,7 +4803,15 @@ function SheetModal({
   };
 
   const body = tall ? (
-    <View style={[styles.sheetBody, styles.sheetBodyTall, styles.sheetContent, styles.sheetContentTall]}>
+    <View
+      style={[
+        styles.sheetBody,
+        hideHeader ? styles.sheetBodyHeaderless : null,
+        styles.sheetBodyTall,
+        styles.sheetContent,
+        styles.sheetContentTall,
+      ]}
+    >
       {children}
     </View>
   ) : (
@@ -4791,21 +4851,23 @@ function SheetModal({
                 sheetGestureStyle,
               ]}
             >
-              <View {...panResponder.panHandlers} style={styles.sheetGestureZone}>
-                {fullscreenActive ? null : (
-                  <View style={styles.sheetDragArea}>
-                    <View style={styles.sheetGrabber} />
+              {hideHeader ? null : (
+                <View {...panResponder.panHandlers} style={styles.sheetGestureZone}>
+                  {fullscreenActive ? null : (
+                    <View style={styles.sheetDragArea}>
+                      <View style={styles.sheetGrabber} />
+                    </View>
+                  )}
+                  <View style={styles.sheetHeader}>
+                    <Text style={styles.sheetTitle} numberOfLines={1}>
+                      {title}
+                    </Text>
+                    <Pressable style={styles.iconButton} onPress={closeSheet}>
+                      <X size={18} color={theme.colors.text} />
+                    </Pressable>
                   </View>
-                )}
-                <View style={styles.sheetHeader}>
-                  <Text style={styles.sheetTitle} numberOfLines={1}>
-                    {title}
-                  </Text>
-                  <Pressable style={styles.iconButton} onPress={closeSheet}>
-                    <X size={18} color={theme.colors.text} />
-                  </Pressable>
                 </View>
-              </View>
+              )}
               {body}
             </Animated.View>
           </View>
@@ -5813,6 +5875,16 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     alignItems: "center",
     justifyContent: "center",
   },
+  paneComposerFullscreenExitButton: {
+    width: 44,
+    height: 44,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   paneComposerInlineButtonActive: {
     borderColor: theme.colors.accent,
     backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
@@ -6165,6 +6237,9 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     flexShrink: 1,
     marginTop: 12,
   },
+  sheetBodyHeaderless: {
+    marginTop: 0,
+  },
   sheetBodyTall: {
     flex: 1,
     minHeight: 0,
@@ -6286,6 +6361,9 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     alignItems: "center",
     justifyContent: "space-between",
     gap: 12,
+  },
+  terminalToolbarHidden: {
+    display: "none",
   },
   terminalMetaBlock: {
     flex: 1,
