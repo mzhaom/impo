@@ -18,6 +18,36 @@ const FILE_PATH_RE = new RegExp(
 const ABSOLUTE_OR_HOME_RE = /^(?:\/|~\/)/;
 const DEFAULT_IMAGE_HANDLER_TEMP_PATH_RE = /^https?:\/\/((?:\.\.\/)+var\/folders\/.+)$/i;
 const DAMAGED_UPLOAD_TEMP_PATH_RE = /^(?:\.\.\/)+(var\/folders\/)/;
+const ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g;
+const SENTENCE_TAIL_RE = /[.,;:!?。，、；：！？…]+$/u;
+const DANGLING_CLOSER_RE = /[\])}>」』”’）》】]+$/u;
+const HTML_ENTITIES: Array<[string, string]> = [
+  ["&quot;", '"'],
+  ["&#034;", '"'],
+  ["&#34;", '"'],
+  ["&#039;", "'"],
+  ["&#39;", "'"],
+  ["&apos;", "'"],
+  ["&lt;", "<"],
+  ["&gt;", ">"],
+  ["&amp;", "&"],
+];
+const WRAPPER_PAIRS: Array<[string, string]> = [
+  ["`", "`"],
+  ['"', '"'],
+  ["'", "'"],
+  ["“", "”"],
+  ["‘", "’"],
+  ["(", ")"],
+  ["[", "]"],
+  ["{", "}"],
+  ["<", ">"],
+  ["（", "）"],
+  ["【", "】"],
+  ["「", "」"],
+  ["『", "』"],
+  ["《", "》"],
+];
 
 function isProbablyUrlPath(text: string, index: number, match: string): boolean {
   if (/^www\./i.test(match)) return true;
@@ -41,13 +71,86 @@ export function splitFilePathText(text: string): FilePathTextPart[] {
     parts.push({
       kind: "file",
       text: visible,
-      path: repairUploadTempPath(visible.replace(/\/\n[ \t]*/g, "/")),
+      path: cleanArtifactPath(visible),
     });
     lastEnd = end;
   }
 
   if (lastEnd < input.length) parts.push({ kind: "text", text: input.slice(lastEnd) });
   return parts.length ? parts : [{ kind: "text", text: input }];
+}
+
+function decodeCommonHtmlEntities(value: string): string {
+  let out = String(value || "");
+  for (const [entity, char] of HTML_ENTITIES) {
+    out = out.split(entity).join(char);
+  }
+  return out;
+}
+
+function stripOuterWrappers(value: string): string {
+  let out = String(value || "").trim();
+  let changed = true;
+  while (changed && out.length >= 2) {
+    changed = false;
+    for (const [open, close] of WRAPPER_PAIRS) {
+      if (out.startsWith(open) && out.endsWith(close)) {
+        out = out.slice(open.length, out.length - close.length).trim();
+        changed = true;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function stripMarkdownLink(value: string): string {
+  const out = String(value || "").trim();
+  const match = out.match(/^!?\[[^\]\n]*\]\(([\s\S]+)\)$/);
+  if (!match) return out;
+  let target = match[1]?.trim() || "";
+  if (target.startsWith("<")) {
+    const close = target.indexOf(">");
+    if (close > 0) return target.slice(1, close).trim();
+  }
+  const titled = target.match(/^([^"' \t\r\n][\s\S]*?)\s+["'][\s\S]*["']$/);
+  if (titled) target = titled[1]?.trim() || "";
+  return target;
+}
+
+function stripFileUrl(value: string): string {
+  const out = String(value || "").trim();
+  if (!/^file:\/\//i.test(out)) return out;
+  try {
+    return decodeURIComponent(new URL(out).pathname || "");
+  } catch {
+    return out.replace(/^file:\/\//i, "");
+  }
+}
+
+export function cleanArtifactPath(value: string): string {
+  let out = String(value || "")
+    .replace(ANSI_ESCAPE_RE, "")
+    .replace(/\/\r?\n[ \t]*/g, "/")
+    .trim();
+  if (!out) return "";
+
+  for (let i = 0; i < 6; i += 1) {
+    const before = out;
+    out = out.replace(/^```[A-Za-z0-9_-]*[ \t]*(?:\r?\n)?/, "");
+    out = out.replace(/(?:\r?\n)?```$/g, "");
+    out = decodeCommonHtmlEntities(out);
+    out = out.replace(SENTENCE_TAIL_RE, "").trim();
+    out = stripMarkdownLink(out);
+    out = stripOuterWrappers(out);
+    out = stripFileUrl(out);
+    out = out.replace(SENTENCE_TAIL_RE, "").trim();
+    out = out.replace(DANGLING_CLOSER_RE, "").trim();
+    out = stripOuterWrappers(out);
+    if (out === before) break;
+  }
+
+  return repairUploadTempPath(out);
 }
 
 function decodePathPart(pathPart: string): string {
@@ -89,7 +192,7 @@ function normalizeJoinedPath(filePath: string): string {
 }
 
 export function resolveLinkedFilePath(filePath: string, basePath = ""): string {
-  const clean = repairUploadTempPath(String(filePath || "").trim());
+  const clean = cleanArtifactPath(filePath);
   if (!clean || ABSOLUTE_OR_HOME_RE.test(clean) || !basePath) return clean;
   const baseDir = dirname(basePath);
   if (!baseDir) return clean;
@@ -97,7 +200,7 @@ export function resolveLinkedFilePath(filePath: string, basePath = ""): string {
 }
 
 export function filePathFromLocalHref(href: string, basePath = ""): string {
-  let raw = String(href || "").trim();
+  let raw = cleanArtifactPath(String(href || "").trim());
   if (!raw || raw.startsWith("#") || raw.startsWith("//")) return "";
   const damagedTempPath = raw.match(DEFAULT_IMAGE_HANDLER_TEMP_PATH_RE);
   if (damagedTempPath) {
@@ -112,12 +215,14 @@ export function filePathFromLocalHref(href: string, basePath = ""): string {
     return "";
   }
   const pathPart = raw.split(/[?#]/, 1)[0];
-  if (!VIEWABLE_FILE_EXT_RE.test(pathPart)) return "";
-  return resolveLinkedFilePath(decodePathPart(pathPart), basePath);
+  const cleanPathPart = cleanArtifactPath(pathPart);
+  if (!VIEWABLE_FILE_EXT_RE.test(cleanPathPart)) return "";
+  return resolveLinkedFilePath(decodePathPart(cleanPathPart), basePath);
 }
 
 export function fileViewerEndpoint(filePath: string): string {
-  if (MARKDOWN_FILE_EXT_RE.test(filePath)) return "/api/file-view";
-  if (OVERLAY_VIEWER_EXT_RE.test(filePath)) return "/api/file-page";
+  const clean = cleanArtifactPath(filePath).split(/[?#]/, 1)[0];
+  if (MARKDOWN_FILE_EXT_RE.test(clean)) return "/api/file-view";
+  if (OVERLAY_VIEWER_EXT_RE.test(clean)) return "/api/file-page";
   return "/api/file-raw";
 }
