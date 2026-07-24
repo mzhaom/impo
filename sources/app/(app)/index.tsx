@@ -77,7 +77,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { TmuxMobileApi } from "@/tmux-mobile/api";
 import { useTmuxMobileApi, useTmuxMobileAuth } from "@/tmux-mobile/auth";
-import { renderAnsiText } from "@/tmux-mobile/ansi";
+import { renderAnsiText, stripUnsupportedAnsi } from "@/tmux-mobile/ansi";
 import {
   cardStarsKey,
   commandCenterKey,
@@ -2453,6 +2453,8 @@ function PaneComposer({
   onClear,
   onRetry,
   onExitFullscreen,
+  following = false,
+  onToggleFollow,
   recognizing = false,
   disabled = false,
   sendDisabled = false,
@@ -2482,6 +2484,8 @@ function PaneComposer({
   onClear?: () => void;
   onRetry?: () => void;
   onExitFullscreen?: () => void;
+  following?: boolean;
+  onToggleFollow?: () => void;
   recognizing?: boolean;
   disabled?: boolean;
   sendDisabled?: boolean;
@@ -2602,6 +2606,30 @@ function PaneComposer({
       </Pressable>
     ) : null;
 
+  const followButton =
+    expanded && onToggleFollow ? (
+      <Pressable
+        accessibilityRole="switch"
+        accessibilityLabel={following ? "Stop following terminal output" : "Follow terminal output"}
+        accessibilityState={{ checked: following }}
+        style={[
+          styles.paneComposerFollowButton,
+          following ? styles.paneComposerInlineButtonActive : null,
+        ]}
+        onPress={onToggleFollow}
+      >
+        <ArrowDown size={15} color={following ? activeIconColor : theme.colors.textMuted} />
+        <Text
+          style={[
+            styles.paneComposerFollowButtonText,
+            following ? styles.paneComposerFollowButtonTextActive : null,
+          ]}
+        >
+          {following ? "Following" : "Follow"}
+        </Text>
+      </Pressable>
+    ) : null;
+
   const input = (
     <TextInput
       value={value}
@@ -2706,6 +2734,7 @@ function PaneComposer({
               {sendButton}
             </View>
           </View>
+          {followButton}
           {reserveStatusSpace || status || error ? (
             <Text style={styles.paneComposerStatus} numberOfLines={1}>
               {status || error || ""}
@@ -3213,13 +3242,18 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const terminalRefreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const terminalSuppressChangeRef = React.useRef(false);
   const terminalSuppressChangeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const terminalSelectionActiveRef = React.useRef(false);
+  const terminalSelectionTouchRef = React.useRef(false);
   const [data, setData] = React.useState<WindowViewResponse | null>(null);
   const [terminalText, setTerminalText] = React.useState("");
+  const [terminalVisibleText, setTerminalVisibleText] = React.useState("");
+  const [terminalSelectionResetKey, setTerminalSelectionResetKey] = React.useState(0);
   const [terminalInput, setTerminalInput] = React.useState("");
   const [terminalKeyboardVisible, setTerminalKeyboardVisible] = React.useState(false);
   const [terminalUploadPickerVisible, setTerminalUploadPickerVisible] = React.useState(false);
   const [terminalUploading, setTerminalUploading] = React.useState(false);
   const [terminalAutoRefresh, setTerminalAutoRefresh] = React.useState(true);
+  const [terminalFollow, setTerminalFollow] = React.useState(true);
   const [terminalFullscreen, setTerminalFullscreen] = React.useState(windowWidth >= 760);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
@@ -3237,6 +3271,10 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     let cancelled = false;
     setData(null);
     setTerminalText("");
+    setTerminalVisibleText("");
+    terminalSelectionActiveRef.current = false;
+    terminalSelectionTouchRef.current = false;
+    setTerminalSelectionResetKey((value) => value + 1);
     setTerminalInput("");
     setTerminalKeyboardVisible(false);
     setTerminalUploadPickerVisible(false);
@@ -3275,8 +3313,9 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     previousTerminalTargetKeyRef.current = terminalTargetKey;
     if (terminalTargetKey && terminalTargetKey !== previousTargetKey) {
       setTerminalFullscreen(windowWidth >= 760);
+      setTerminalFollow(terminalAutoRefresh);
     }
-  }, [terminalTargetKey, windowWidth]);
+  }, [terminalAutoRefresh, terminalTargetKey, windowWidth]);
 
   React.useEffect(() => {
     return () => {
@@ -3406,7 +3445,19 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     return () => clearInterval(timer);
   }, [activePaneId, api, refreshCapture, target, terminalAutoRefresh]);
 
-  const terminalNodes = React.useMemo(() => renderAnsiText(terminalText, { selectable: true }), [terminalText]);
+  React.useEffect(() => {
+    if (!terminalSelectionActiveRef.current && !terminalSelectionTouchRef.current) {
+      setTerminalVisibleText(terminalText);
+    }
+  }, [terminalText]);
+
+  const terminalDisplayText = Platform.OS === "ios" ? terminalVisibleText : terminalText;
+  const terminalPlainText = React.useMemo(() => stripUnsupportedAnsi(terminalDisplayText), [terminalDisplayText]);
+  const terminalNodes = React.useMemo(
+    () => (Platform.OS === "ios" ? [] : renderAnsiText(terminalDisplayText)),
+    [terminalDisplayText],
+  );
+  const terminalShouldFollow = Platform.OS === "ios" ? terminalFollow : terminalAutoRefresh;
   const scrollPaneTailToEnd = React.useCallback((animated = false) => {
     requestAnimationFrame(() => {
       paneTailScrollRef.current?.scrollToEnd({ animated });
@@ -3414,11 +3465,55 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   }, []);
 
   React.useEffect(() => {
-    if (terminalAutoRefresh && terminalText) scrollPaneTailToEnd(false);
-  }, [scrollPaneTailToEnd, terminalAutoRefresh, terminalText]);
+    if (terminalShouldFollow && terminalDisplayText) scrollPaneTailToEnd(false);
+  }, [scrollPaneTailToEnd, terminalDisplayText, terminalShouldFollow]);
+
+  const handleTerminalSelectionChange = React.useCallback<NonNullable<TextInputProps["onSelectionChange"]>>(
+    (event) => {
+      const { start, end } = event.nativeEvent.selection;
+      const hasSelection = start !== end;
+      terminalSelectionActiveRef.current = hasSelection;
+      if (hasSelection) {
+        setTerminalFollow(false);
+        return;
+      }
+      if (!terminalSelectionTouchRef.current) setTerminalVisibleText(terminalText);
+    },
+    [terminalText],
+  );
+
+  const handleTerminalSelectionBlur = React.useCallback(() => {
+    terminalSelectionActiveRef.current = false;
+    terminalSelectionTouchRef.current = false;
+    setTerminalVisibleText(terminalText);
+  }, [terminalText]);
+
+  const handleTerminalSelectionTouchStart = React.useCallback(() => {
+    terminalSelectionTouchRef.current = true;
+  }, []);
+
+  const handleTerminalSelectionTouchEnd = React.useCallback(() => {
+    terminalSelectionTouchRef.current = false;
+    if (!terminalSelectionActiveRef.current) setTerminalVisibleText(terminalText);
+  }, [terminalText]);
+
+  const toggleTerminalFollow = React.useCallback(() => {
+    if (terminalFollow) {
+      setTerminalFollow(false);
+      return;
+    }
+    terminalSelectionActiveRef.current = false;
+    terminalSelectionTouchRef.current = false;
+    setTerminalVisibleText(terminalText);
+    setTerminalSelectionResetKey((value) => value + 1);
+    setTerminalAutoRefresh(true);
+    setTerminalFollow(true);
+    refreshCapture(true).catch(() => {});
+    scrollPaneTailToEnd(false);
+  }, [refreshCapture, scrollPaneTailToEnd, terminalFollow, terminalText]);
 
   const copyTerminalOutput = React.useCallback(async () => {
-    await Clipboard.setStringAsync(terminalText || "");
+    await Clipboard.setStringAsync(stripUnsupportedAnsi(terminalText));
     setStatus("Output copied");
     void Haptics.selectionAsync();
   }, [terminalText]);
@@ -3654,7 +3749,16 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
             label={terminalAutoRefresh ? "Disable auto update" : "Enable auto update"}
             active={terminalAutoRefresh}
             onPress={() => {
-              setTerminalAutoRefresh((value) => !value);
+              const next = !terminalAutoRefresh;
+              setTerminalAutoRefresh(next);
+              setTerminalFollow(next);
+              if (next) {
+                terminalSelectionActiveRef.current = false;
+                terminalSelectionTouchRef.current = false;
+                setTerminalVisibleText(terminalText);
+                setTerminalSelectionResetKey((value) => value + 1);
+                scrollPaneTailToEnd(false);
+              }
             }}
           />
           <ActionButton
@@ -3686,12 +3790,38 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         ref={paneTailScrollRef}
         style={styles.terminalBox}
         onContentSizeChange={() => {
-          if (terminalAutoRefresh) scrollPaneTailToEnd(false);
+          if (terminalShouldFollow) scrollPaneTailToEnd(false);
+        }}
+        onScrollBeginDrag={() => {
+          if (Platform.OS === "ios") setTerminalFollow(false);
         }}
         keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         keyboardShouldPersistTaps="handled"
       >
-        <Text selectable style={styles.terminalText}>{terminalText ? terminalNodes : "No output."}</Text>
+        {Platform.OS === "ios" ? (
+          <TextInput
+            key={`${terminalTargetKey}:${terminalSelectionResetKey}`}
+            accessibilityLabel="Terminal output"
+            multiline
+            editable={false}
+            scrollEnabled={false}
+            caretHidden
+            contextMenuHidden={false}
+            showSoftInputOnFocus={false}
+            selectionColor={theme.colors.accent}
+            value={terminalPlainText || "No output."}
+            onBlur={handleTerminalSelectionBlur}
+            onSelectionChange={handleTerminalSelectionChange}
+            onTouchCancel={handleTerminalSelectionTouchEnd}
+            onTouchEnd={handleTerminalSelectionTouchEnd}
+            onTouchStart={handleTerminalSelectionTouchStart}
+            style={[styles.terminalText, styles.terminalSelectableText]}
+          />
+        ) : (
+          <Text selectable style={styles.terminalText}>
+            {terminalDisplayText ? terminalNodes : "No output."}
+          </Text>
+        )}
       </ScrollView>
       <PaneComposer
         variant="expanded"
@@ -3718,6 +3848,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         }}
         onRetry={() => sendTerminalInput({ submit: true })}
         onExitFullscreen={terminalFullscreen ? exitTerminalFullscreen : undefined}
+        following={terminalFollow}
+        onToggleFollow={terminalFullscreen && Platform.OS === "ios" ? toggleTerminalFollow : undefined}
         recognizing={terminalVoiceInput.active}
         disabled={!target}
         sendBusy={sendText.isPending}
@@ -5963,6 +6095,27 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     alignItems: "center",
     justifyContent: "center",
   },
+  paneComposerFollowButton: {
+    minWidth: 76,
+    minHeight: 44,
+    paddingHorizontal: 9,
+    alignSelf: "flex-start",
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  paneComposerFollowButtonText: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  paneComposerFollowButtonTextActive: {
+    color: theme.colors.accent,
+  },
   paneComposerFullscreenExitButton: {
     width: 44,
     height: 44,
@@ -6489,6 +6642,14 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     minWidth: 0,
     ...theme.typography.mono,
     color: "#edece5",
+  },
+  terminalSelectableText: {
+    width: "100%",
+    padding: 0,
+    margin: 0,
+    borderWidth: 0,
+    backgroundColor: "transparent",
+    textAlignVertical: "top",
   },
   transcriptBox: {
     flex: 1,
