@@ -195,7 +195,16 @@ const PROMPT_SHORTCUTS = [
   { label: "Slash", text: "/" },
 ] as const;
 
-const FALLBACK_SNIPPETS: UserSnippetItem[] = PROMPT_SHORTCUTS.map((item) => ({ text: item.text }));
+const FALLBACK_SNIPPETS: UserSnippetItem[] = [
+  { text: "yes" },
+  { text: "continue" },
+  { text: "/clear" },
+  { text: "/model" },
+  { text: "/btw " },
+  { text: "claude" },
+  { text: "codex" },
+  { text: "/goal " },
+];
 
 function cleanSnippetItems(items: Array<UserSnippetItem | string> | undefined | null): UserSnippetItem[] {
   if (!Array.isArray(items)) return [];
