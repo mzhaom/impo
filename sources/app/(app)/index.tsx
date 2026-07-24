@@ -132,6 +132,7 @@ const AGENT_ICONS: Record<string, number> = {
   codex: require("@/assets/images/icon-gpt.png"),
   gemini: require("@/assets/images/icon-gemini.png"),
 };
+const APP_LOGO = require("../../../logo.png");
 
 const EMPTY_MACHINES: Machine[] = [];
 const EMPTY_AGENTS: AgentSession[] = [];
@@ -1031,11 +1032,14 @@ function CommandCenterScreen() {
     <View {...commandCenterKeyboardProps} style={[styles.screen, { paddingTop: insets.top + 8 }]}>
       <StatusBar style={theme.dark ? "light" : "dark"} />
       <View style={styles.header}>
-        <View style={styles.headerTitleBlock}>
-          <Text style={styles.title}>AMUX</Text>
-          <Text style={styles.headerMeta} numberOfLines={1}>
-            {auth.session.user.email || auth.baseUrl}
-          </Text>
+        <View style={styles.headerBrand}>
+          <Image source={APP_LOGO} style={styles.headerLogo} resizeMode="contain" accessible={false} />
+          <View style={styles.headerTitleBlock}>
+            <Text style={styles.title}>AMUX</Text>
+            <Text style={styles.headerMeta} numberOfLines={1}>
+              {auth.session.user.email || auth.baseUrl}
+            </Text>
+          </View>
         </View>
         <View style={styles.headerButtons}>
           <IconButton
@@ -1230,7 +1234,7 @@ function LoginScreen() {
     >
       <StatusBar style={theme.dark ? "light" : "dark"} />
       <View style={styles.loginPanel}>
-        <Terminal size={34} color={theme.colors.accent} />
+        <Image source={APP_LOGO} style={styles.loginLogo} resizeMode="contain" accessible={false} />
         <Text style={styles.loginTitle}>AMUX</Text>
         <Text style={styles.loginText}>
           Native command center for Codex and Claude sessions running through tmux-mobile.
@@ -4319,12 +4323,16 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
   const renamePin = useRenamePin();
   const deletePin = useDeletePin();
   const [status, setStatus] = React.useState("");
+  const [renameTarget, setRenameTarget] = React.useState<ArtifactPin | null>(null);
+  const [renameName, setRenameName] = React.useState("");
   const data = pins.data?.pins || [];
   const refetchPins = pins.refetch;
 
   React.useEffect(() => {
     if (visible) {
       setStatus("");
+      setRenameTarget(null);
+      setRenameName("");
       void refetchPins();
     }
   }, [refetchPins, visible]);
@@ -4361,32 +4369,31 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
   const requestRenamePin = React.useCallback(
     (pin: ArtifactPin) => {
       if (!pin.owned) return;
-      Alert.prompt(
-        "Rename artifact",
-        "",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Rename",
-            onPress: (value?: string) => {
-              const name = String(value || "").trim();
-              if (!name || name === pin.name) return;
-              renamePin.mutate(
-                { id: pin.id, name },
-                {
-                  onSuccess: () => setStatus("Renamed"),
-                  onError: (error) => setStatus(error instanceof Error ? error.message : String(error)),
-                },
-              );
-            },
-          },
-        ],
-        "plain-text",
-        pin.name || "",
-      );
+      renamePin.reset();
+      setRenameTarget(pin);
+      setRenameName(pin.name || "");
+      setStatus("");
     },
     [renamePin],
   );
+
+  const submitRenamePin = React.useCallback(() => {
+    if (!renameTarget || renamePin.isPending) return;
+    const name = renameName.trim();
+    if (!name || name === renameTarget.name) return;
+    renamePin.mutate(
+      { id: renameTarget.id, name },
+      {
+        onSuccess: () => {
+          setRenameTarget(null);
+          setRenameName("");
+          setStatus("Renamed");
+          void Haptics.selectionAsync();
+        },
+        onError: (error) => setStatus(error instanceof Error ? error.message : String(error)),
+      },
+    );
+  }, [renameName, renamePin, renameTarget]);
 
   const confirmDeletePin = React.useCallback(
     (pin: ArtifactPin) => {
@@ -4435,6 +4442,68 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
             ""}
         </Text>
       ) : null}
+      {renameTarget ? (
+        <View style={styles.pinRenameEditor}>
+          <Text style={styles.inputLabel} numberOfLines={1}>
+            Rename artifact
+          </Text>
+          <TextInput
+            accessibilityLabel="Artifact name"
+            value={renameName}
+            onChangeText={setRenameName}
+            editable={!renamePin.isPending}
+            autoFocus
+            autoCapitalize="sentences"
+            autoCorrect={false}
+            returnKeyType="done"
+            selectTextOnFocus
+            onSubmitEditing={submitRenamePin}
+            style={styles.textInput}
+          />
+          <View style={styles.settingsButtonRow}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: renamePin.isPending }}
+              style={[
+                styles.settingsSecondaryButton,
+                styles.pinRenameButton,
+                renamePin.isPending ? styles.disabledButton : null,
+              ]}
+              disabled={renamePin.isPending}
+              onPress={() => {
+                renamePin.reset();
+                setRenameTarget(null);
+                setRenameName("");
+              }}
+            >
+              <X size={15} color={theme.colors.text} />
+              <Text style={styles.secondaryButtonText}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{
+                disabled: renamePin.isPending || !renameName.trim() || renameName.trim() === renameTarget.name,
+              }}
+              style={[
+                styles.settingsPrimaryButton,
+                styles.pinRenameButton,
+                renamePin.isPending || !renameName.trim() || renameName.trim() === renameTarget.name
+                  ? styles.disabledButton
+                  : null,
+              ]}
+              disabled={renamePin.isPending || !renameName.trim() || renameName.trim() === renameTarget.name}
+              onPress={submitRenamePin}
+            >
+              {renamePin.isPending ? (
+                <ActivityIndicator color={theme.colors.surfaceRaised} />
+              ) : (
+                <Check size={15} color={theme.colors.surfaceRaised} />
+              )}
+              <Text style={styles.primaryButtonText}>Rename</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
       <FlatList
         data={data}
         style={styles.pinsViewport}
@@ -4459,7 +4528,7 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
         renderItem={({ item }) => (
           <ArtifactPinRow
             pin={item}
-            busy={renamePin.isPending || deletePin.isPending}
+            busy={Boolean(renameTarget) || renamePin.isPending || deletePin.isPending}
             onOpen={() => openPin(item)}
             onCopy={() => {
               copyPinLink(item).catch((error) => {
@@ -5080,6 +5149,19 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+  headerBrand: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  headerLogo: {
+    width: 38,
+    height: 38,
+    flexShrink: 0,
+    borderRadius: theme.radii.md,
   },
   headerTitleBlock: {
     flex: 1,
@@ -5719,6 +5801,12 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     borderColor: theme.colors.border,
     padding: 18,
     gap: 14,
+  },
+  loginLogo: {
+    width: 64,
+    height: 64,
+    flexShrink: 0,
+    borderRadius: theme.radii.lg,
   },
   loginTitle: {
     ...theme.typography.title,
@@ -6406,6 +6494,19 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     flex: 1,
     minHeight: 0,
     minWidth: 0,
+  },
+  pinRenameEditor: {
+    width: "100%",
+    minWidth: 0,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    padding: 12,
+    gap: 10,
+  },
+  pinRenameButton: {
+    minHeight: 48,
   },
   pinsViewport: {
     flex: 1,

@@ -7,7 +7,8 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
-/ios
+# The iOS native project is versioned for reproducible TestFlight builds.
+# ios/.gitignore excludes Pods, build products, and machine-local Xcode state.
 /android
 
 # Native signing and local SDK state
