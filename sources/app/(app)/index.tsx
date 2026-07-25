@@ -41,6 +41,8 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
+  ChevronDown,
+  ChevronUp,
   CheckCircle,
   Circle,
   CloudDownload,
@@ -118,6 +120,21 @@ import {
   resolveLinkedFilePath,
   splitFilePathText,
 } from "@/tmux-mobile/file-links";
+import {
+  composerSnippetLabel,
+  FALLBACK_SNIPPETS,
+  prioritizeGoalSnippet,
+} from "@/tmux-mobile/composer-snippets";
+import {
+  resolveCommandCenterShortcut,
+  type CommandCenterShortcutEvent,
+} from "@/tmux-mobile/command-center-shortcuts";
+import { LegacyIPadShortcutCapture } from "@/tmux-mobile/legacy-ipad-shortcut-capture";
+import {
+  nextExpandedSessionKey,
+  sessionCardSummary,
+  shouldUseCompactSessionCards,
+} from "@/tmux-mobile/session-card";
 import { useOtaUpdates, type OtaUpdateController, type OtaUpdateNotice } from "@/tmux-mobile/updates";
 import {
   normalizeSpokenControllerUrl,
@@ -214,17 +231,6 @@ const PROMPT_SHORTCUTS = [
   { label: "Yes", text: "yes" },
   { label: "Slash", text: "/" },
 ] as const;
-
-const FALLBACK_SNIPPETS: UserSnippetItem[] = [
-  { text: "yes" },
-  { text: "continue" },
-  { text: "/clear" },
-  { text: "/model" },
-  { text: "/btw " },
-  { text: "claude" },
-  { text: "codex" },
-  { text: "/goal " },
-];
 
 function cleanSnippetItems(items: Array<UserSnippetItem | string> | undefined | null): UserSnippetItem[] {
   if (!Array.isArray(items)) return [];
@@ -359,7 +365,7 @@ function useFieldPresentation(field: VisionFieldId) {
 }
 
 function activityTime(agent: AgentSession): number {
-  const value = Date.parse(String(agent.lastActivityAt || ""));
+  const value = Date.parse(String(sessionCardSummary(agent).lastActivityAt || ""));
   return Number.isFinite(value) ? value : 0;
 }
 
@@ -665,6 +671,7 @@ function CommandCenterScreen() {
   const [pinsVisible, setPinsVisible] = React.useState(false);
   const [settingsVisible, setSettingsVisible] = React.useState(false);
   const [selectedAgent, setSelectedAgent] = React.useState<AgentSession | null>(null);
+  const [expandedAgentKey, setExpandedAgentKey] = React.useState<string | null>(null);
   const [machineChipReadLoaded, setMachineChipReadLoaded] = React.useState(false);
   const [machineChipReadAt, setMachineChipReadAt] = React.useState<number | null>(null);
   const appState = React.useRef(AppState.currentState);
@@ -681,6 +688,10 @@ function CommandCenterScreen() {
     visionControlsPreference,
     NATIVE_VISION_CONTROLS_DETECTED,
   );
+  const useCompactSessionCards = shouldUseCompactSessionCards({
+    isPad: Platform.OS === "ios" && Platform.isPad,
+    isVision: visionControlsEnabled,
+  });
 
   React.useEffect(() => {
     let mounted = true;
@@ -774,6 +785,15 @@ function CommandCenterScreen() {
       ...unstarredAgents.sort(compareRecentActivity),
     ];
   }, [machineFilter, rawAgents, stars]);
+
+  React.useEffect(() => {
+    if (
+      expandedAgentKey &&
+      !agents.some((agent) => agentCardKey(agent) === expandedAgentKey)
+    ) {
+      setExpandedAgentKey(null);
+    }
+  }, [agents, expandedAgentKey]);
 
   const toggleStar = React.useCallback(
     (agent: AgentSession) => {
@@ -995,13 +1015,14 @@ function CommandCenterScreen() {
           metaKey?: boolean;
           altKey?: boolean;
           shiftKey?: boolean;
+          repeat?: boolean;
         };
       };
       const native = e.nativeEvent || {};
-      const key = String(native.key || "");
-      if (!key || native.ctrlKey || native.metaKey || native.altKey) return;
+      const shortcut = resolveCommandCenterShortcut(native as CommandCenterShortcutEvent);
+      if (!shortcut) return;
 
-      if (key === "Escape") {
+      if (shortcut.type === "escape") {
         if (menuVisible) setMenuVisible(false);
         else if (pinsVisible) setPinsVisible(false);
         else if (settingsVisible) setSettingsVisible(false);
@@ -1013,45 +1034,33 @@ function CommandCenterScreen() {
 
       if (modalOpen) return;
 
-      const directionForKey: Record<string, "left" | "right" | "up" | "down"> = {
-        ArrowLeft: "left",
-        h: "left",
-        ArrowRight: "right",
-        l: "right",
-        ArrowUp: "up",
-        k: "up",
-        ArrowDown: "down",
-        j: "down",
-      };
-      const direction = directionForKey[key] || directionForKey[key.toLowerCase()];
-      if (direction) {
+      if (shortcut.type === "move") {
         e.preventDefault?.();
-        moveSelectedAgent(direction);
+        moveSelectedAgent(shortcut.direction);
         return;
       }
 
       const agent = activeShortcutAgent;
-      const lowered = key.toLowerCase();
       if (!agent) return;
-      if (key === "Enter" || lowered === "o") {
+      if (shortcut.type === "view") {
         e.preventDefault?.();
         setSelectedAgent(agent);
         setViewTarget(agent);
-      } else if (lowered === "r") {
+      } else if (shortcut.type === "reply") {
         e.preventDefault?.();
         setSelectedAgent(agent);
         setSendTarget(agent);
-      } else if (lowered === "f") {
+      } else if (shortcut.type === "response") {
         e.preventDefault?.();
         if (agent.lastAssistantText) {
           setSelectedAgent(agent);
           setResponseTarget(agent);
         }
-      } else if (lowered === "t") {
+      } else if (shortcut.type === "transcript") {
         e.preventDefault?.();
         setSelectedAgent(agent);
         setTranscriptTarget(agent);
-      } else if (lowered === "u") {
+      } else if (shortcut.type === "refresh") {
         e.preventDefault?.();
         refreshCommandCenter();
       }
@@ -1069,13 +1078,22 @@ function CommandCenterScreen() {
   );
 
   const commandCenterKeyboardProps = React.useMemo(
-    () =>
-      ({
-        focusable: true,
-        tabIndex: 0,
-        onKeyDownCapture: handleCommandCenterKeyDown,
-        onKeyDown: handleCommandCenterKeyDown,
-      }) as Record<string, unknown>,
+    () => {
+      if (Platform.OS === "web") {
+        return {
+          focusable: true,
+          tabIndex: 0,
+          onKeyDownCapture: handleCommandCenterKeyDown,
+        } as Record<string, unknown>;
+      }
+      if (Platform.OS === "android") {
+        return {
+          focusable: true,
+          onKeyDown: handleCommandCenterKeyDown,
+        } as Record<string, unknown>;
+      }
+      return {};
+    },
     [handleCommandCenterKeyDown],
   );
 
@@ -1134,6 +1152,10 @@ function CommandCenterScreen() {
   return withTheme(
     <View {...commandCenterKeyboardProps} style={[styles.screen, { paddingTop: insets.top + 8 }]}>
       <StatusBar style={theme.dark ? "light" : "dark"} />
+      <LegacyIPadShortcutCapture
+        enabled={Platform.OS === "ios" && Platform.isPad && !visionControlsEnabled && !modalOpen}
+        onKeyDown={handleCommandCenterKeyDown}
+      />
       <View style={styles.header}>
         <View style={styles.headerBrand}>
           <Image source={APP_LOGO} style={styles.headerLogo} resizeMode="contain" accessible={false} />
@@ -1199,6 +1221,9 @@ function CommandCenterScreen() {
         key={`agent-grid-${layout.listColumns}`}
         data={agents}
         keyExtractor={agentCardKey}
+        extraData={
+          useCompactSessionCards ? expandedAgentKey : "all-cards-expanded"
+        }
         style={styles.listViewport}
         contentContainerStyle={[
           styles.listContent,
@@ -1233,8 +1258,15 @@ function CommandCenterScreen() {
               agent={item}
               starred={starred}
               selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
+              collapsible={useCompactSessionCards}
+              expanded={!useCompactSessionCards || expandedAgentKey === key}
               onToggleStar={() => toggleStar(item)}
               onSelect={selectAgent}
+              onToggleExpanded={() => {
+                if (!useCompactSessionCards) return;
+                setExpandedAgentKey((current) => nextExpandedSessionKey(current, key));
+                void Haptics.selectionAsync();
+              }}
               onSend={() => {
                 selectAgent();
                 setSendTarget(item);
@@ -1830,8 +1862,11 @@ function AgentCard({
   agent,
   starred,
   selected,
+  collapsible,
+  expanded,
   onToggleStar,
   onSelect,
+  onToggleExpanded,
   onSend,
   onRename,
   onDelete,
@@ -1845,8 +1880,11 @@ function AgentCard({
   agent: AgentSession;
   starred: boolean;
   selected: boolean;
+  collapsible: boolean;
+  expanded: boolean;
   onToggleStar: () => void;
   onSelect: () => void;
+  onToggleExpanded: () => void;
   onSend: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -1862,6 +1900,10 @@ function AgentCard({
   const icon = AGENT_ICONS[String(agent.kind || "").toLowerCase()];
   const status = agent.waitingForInput ? "waiting" : agent.status || agent.turn || "unverified";
   const running = status === "running";
+  const summary = sessionCardSummary(agent);
+  const activityLabel = relativeTimeLabel(summary.lastActivityAt) || "No activity";
+  const compactStatusLabel =
+    running ? "RUN" : status === "waiting" ? "WAIT" : status === "idle" ? "IDLE" : "?";
   const statusStyle =
     running
       ? styles.statusRunning
@@ -1872,118 +1914,206 @@ function AgentCard({
           : styles.statusUnknown;
 
   return (
-    <Pressable
-      style={[styles.card, running ? styles.cardRunning : null, selected ? styles.cardSelected : null]}
-      onPress={onSelect}
+    <View
+      style={[
+        styles.card,
+        !expanded ? styles.cardCompact : null,
+        running ? styles.cardRunning : null,
+        selected ? styles.cardSelected : null,
+      ]}
     >
       <RunningCardEdge active={running} />
       <Pressable
         accessibilityLabel={starred ? "Unstar session" : "Star session"}
         accessibilityState={{ selected: starred }}
-        style={[styles.starButton, starred ? styles.starButtonActive : null]}
+        style={[
+          styles.starButton,
+          starred ? styles.starButtonActive : null,
+          !expanded ? styles.starButtonCompact : null,
+        ]}
         hitSlop={12}
         onPress={onToggleStar}
       >
         <Star
-          size={18}
+          size={expanded ? 18 : 16}
           color={starred ? theme.colors.warning : theme.colors.textMuted}
           fill={starred ? theme.colors.warning : "transparent"}
         />
       </Pressable>
-      <View style={styles.cardHeader}>
-        <View style={styles.agentAvatar}>
-          {icon ? (
-            <Image source={icon} style={styles.agentIcon} resizeMode="contain" />
-          ) : (
-            <Terminal size={18} color={theme.colors.text} />
-          )}
-        </View>
-        <View style={styles.cardTitleBlock}>
-          <View style={styles.cardTitleRow}>
-            <Text style={styles.cardTitle} numberOfLines={1}>
-              {agentTitle(agent)}
-            </Text>
-            {agent.sessionName ? (
-              <Text style={styles.sessionPill} numberOfLines={1}>
-                {agent.sessionName}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Window ${summary.windowName}. Session ${
+          summary.sessionName || "unnamed"
+        }. Directory ${summary.directory || "unknown"}. Machine ${
+          summary.machineName || "unknown"
+        }. Agent ${agent.kind || "unknown"}. Status ${status}. Last activity ${activityLabel}.`}
+        accessibilityHint={
+          collapsible
+            ? expanded
+              ? "Hide session details"
+              : "Show session details"
+            : "Select session"
+        }
+        accessibilityState={
+          collapsible ? { expanded, selected } : { selected }
+        }
+        style={({ pressed }) => [
+          expanded ? styles.cardExpandedSummary : styles.cardCompactSummary,
+          pressed ? styles.cardSummaryPressed : null,
+        ]}
+        onPress={() => {
+          onSelect();
+          if (collapsible) onToggleExpanded();
+        }}
+      >
+        {expanded ? (
+          <View style={styles.cardHeader}>
+            <View style={styles.agentAvatar}>
+              {icon ? (
+                <Image source={icon} style={styles.agentIcon} resizeMode="contain" />
+              ) : (
+                <Terminal size={18} color={theme.colors.text} />
+              )}
+            </View>
+            <View style={styles.cardTitleBlock}>
+              <View style={styles.cardTitleRow}>
+                <Text style={styles.cardTitle} numberOfLines={1}>
+                  {agentTitle(agent)}
+                </Text>
+                {agent.sessionName ? (
+                  <Text style={styles.sessionPill} numberOfLines={1}>
+                    {agent.sessionName}
+                  </Text>
+                ) : null}
+              </View>
+              <Text style={styles.cardMeta} numberOfLines={1}>
+                {agent.machineHostname || agentMachineKey(agent)} · {agent.kind || "agent"} ·{" "}
+                {agent.mux || "tmux"}
               </Text>
+            </View>
+            {collapsible ? (
+              <ChevronUp size={18} color={theme.colors.textMuted} />
             ) : null}
           </View>
-          <Text style={styles.cardMeta} numberOfLines={1}>
-            {agent.machineHostname || agentMachineKey(agent)} · {agent.kind || "agent"} · {agent.mux || "tmux"}
-          </Text>
-        </View>
-      </View>
-      <View style={styles.cardBody}>
-        <View style={styles.statusRow}>
-          <View style={[styles.statusDot, statusStyle]} />
-          <Text style={styles.statusText}>{status}</Text>
-          <Text style={styles.statusDivider}>·</Text>
-          <Text style={styles.statusText}>{agent.turnCount || 0} turns</Text>
-          {agent.cwd ? (
-            <>
-              <Text style={styles.statusDivider}>·</Text>
-              <Text style={styles.cwdText} numberOfLines={1}>
-                {agent.cwd}
+        ) : (
+          <>
+            <View style={styles.compactCardTopRow}>
+              <Text style={styles.compactFieldLabel}>Window</Text>
+              <Text style={styles.compactWindowName} numberOfLines={1}>
+                {summary.windowName}
               </Text>
-            </>
-          ) : null}
-        </View>
-        {agent.lastUserText ? (
-          <View>
-            <CardSectionHeader label="Last prompt" timestamp={agent.lastUserAt} />
-            <Text style={styles.promptText} numberOfLines={2}>
-              {agent.lastUserText}
-            </Text>
-          </View>
-        ) : null}
-        {agent.lastAssistantText ? (
-          <View style={styles.responseBlock}>
-            <CardSectionHeader label="Last response" timestamp={agent.lastAssistantAt} />
-            <LinkedPathText
-              text={agent.lastAssistantText}
-              style={styles.answerText}
-              numberOfLines={3}
-              onOpenPath={onOpenFile}
-            />
-            <View style={styles.responseActions}>
-              <ActionButton
-                icon={<Maximize2 size={15} color={theme.colors.text} />}
-                label="Open response"
-                onPress={onViewResponse}
-              />
-              <ActionButton
-                icon={
-                  responseCopied ? (
-                    <Check size={15} color={theme.colors.success} />
-                  ) : (
-                    <Copy size={15} color={theme.colors.text} />
-                  )
-                }
-                label="Copy response"
-                onPress={onCopyResponse}
-              />
+              <View style={[styles.statusDot, styles.compactStatusDot, statusStyle]} />
+              <Text style={styles.compactStatusText} numberOfLines={1}>
+                {compactStatusLabel}
+              </Text>
+              <Text
+                style={styles.compactActivityTime}
+                accessibilityLabel={exactTimeLabel(summary.lastActivityAt)}
+                numberOfLines={1}
+              >
+                {activityLabel}
+              </Text>
+              <ChevronDown size={17} color={theme.colors.textMuted} />
             </View>
+            <View style={styles.compactCardMetaRow}>
+              <Text style={styles.compactFieldLabel}>Session</Text>
+              <Text style={styles.compactSessionName} numberOfLines={1}>
+                {summary.sessionName || "—"}
+              </Text>
+              <Text style={styles.compactMetaDivider}>·</Text>
+              <Text style={styles.compactMachineName} numberOfLines={1}>
+                {summary.machineName} · {agent.kind || "agent"}
+              </Text>
+            </View>
+            <View style={styles.compactCardDirectoryRow}>
+              <Text style={styles.compactFieldLabel}>Dir</Text>
+              <Text
+                style={styles.compactDirectory}
+                numberOfLines={1}
+                ellipsizeMode="middle"
+              >
+                {summary.directory || "—"}
+              </Text>
+            </View>
+          </>
+        )}
+      </Pressable>
+      {expanded ? (
+        <View style={styles.cardBody}>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusDot, statusStyle]} />
+            <Text style={styles.statusText}>{status}</Text>
+            <Text style={styles.statusDivider}>·</Text>
+            <Text style={styles.statusText}>{agent.turnCount || 0} turns</Text>
+            {agent.cwd ? (
+              <>
+                <Text style={styles.statusDivider}>·</Text>
+                <Text style={styles.cwdText} numberOfLines={1}>
+                  {agent.cwd}
+                </Text>
+              </>
+            ) : null}
           </View>
-        ) : null}
-        {!agent.lastUserText && !agent.lastAssistantText ? (
-          <Text style={styles.answerText} numberOfLines={2}>
-            {agentSubtitle(agent) || "No transcript yet."}
-          </Text>
-        ) : null}
-        <View style={styles.cardActions}>
-          <ActionButton icon={<Send size={15} color={theme.colors.text} />} label="Send" onPress={onSend} />
-          <ActionButton icon={<Eye size={15} color={theme.colors.text} />} label="View" onPress={onView} />
-          <ActionButton
-            icon={<MessageSquareText size={15} color={theme.colors.text} />}
-            label="Transcript"
-            onPress={onTranscript}
-          />
-          <ActionButton icon={<Edit3 size={15} color={theme.colors.text} />} label="Rename" onPress={onRename} />
-          <ActionButton icon={<Trash2 size={15} color={theme.colors.danger} />} label="Delete session" onPress={onDelete} />
+          {agent.lastUserText ? (
+            <View>
+              <CardSectionHeader label="Last prompt" timestamp={agent.lastUserAt} />
+              <Text style={styles.promptText} numberOfLines={2}>
+                {agent.lastUserText}
+              </Text>
+            </View>
+          ) : null}
+          {agent.lastAssistantText ? (
+            <View style={styles.responseBlock}>
+              <CardSectionHeader label="Last response" timestamp={agent.lastAssistantAt} />
+              <LinkedPathText
+                text={agent.lastAssistantText}
+                style={styles.answerText}
+                numberOfLines={3}
+                onOpenPath={onOpenFile}
+              />
+              <View style={styles.responseActions}>
+                <ActionButton
+                  icon={<Maximize2 size={15} color={theme.colors.text} />}
+                  label="Open response"
+                  onPress={onViewResponse}
+                />
+                <ActionButton
+                  icon={
+                    responseCopied ? (
+                      <Check size={15} color={theme.colors.success} />
+                    ) : (
+                      <Copy size={15} color={theme.colors.text} />
+                    )
+                  }
+                  label="Copy response"
+                  onPress={onCopyResponse}
+                />
+              </View>
+            </View>
+          ) : null}
+          {!agent.lastUserText && !agent.lastAssistantText ? (
+            <Text style={styles.answerText} numberOfLines={2}>
+              {agentSubtitle(agent) || "No transcript yet."}
+            </Text>
+          ) : null}
+          <View style={styles.cardActions}>
+            <ActionButton icon={<Send size={15} color={theme.colors.text} />} label="Send" onPress={onSend} />
+            <ActionButton icon={<Eye size={15} color={theme.colors.text} />} label="View" onPress={onView} />
+            <ActionButton
+              icon={<MessageSquareText size={15} color={theme.colors.text} />}
+              label="Transcript"
+              onPress={onTranscript}
+            />
+            <ActionButton icon={<Edit3 size={15} color={theme.colors.text} />} label="Rename" onPress={onRename} />
+            <ActionButton
+              icon={<Trash2 size={15} color={theme.colors.danger} />}
+              label="Delete session"
+              onPress={onDelete}
+            />
+          </View>
         </View>
-      </View>
-    </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -3074,7 +3204,9 @@ function PaneComposer({
   const [visionMoreVisible, setVisionMoreVisible] = React.useState(false);
   const snippetItems = React.useMemo(() => {
     const loaded = cleanSnippetItems(snippets.data?.items);
-    return loaded.length > 0 ? loaded : FALLBACK_SNIPPETS;
+    return prioritizeGoalSnippet(
+      loaded.length > 0 ? loaded : FALLBACK_SNIPPETS,
+    );
   }, [snippets.data?.items]);
 
   React.useEffect(() => {
@@ -3471,7 +3603,7 @@ function PaneComposer({
                 }}
               >
                 <Text style={styles.shortcutText} numberOfLines={1}>
-                  {shortcut.text}
+                  {composerSnippetLabel(shortcut.text)}
                 </Text>
               </Pressable>
             ))}
@@ -6459,6 +6591,10 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
 	    padding: layout.cardPadding,
 	    gap: 10,
 	  },
+  cardCompact: {
+    paddingVertical: 10,
+    gap: 0,
+  },
 	  cardRunning: {
 	    borderColor: theme.dark ? "rgba(90, 150, 204, 0.42)" : "rgba(53, 89, 122, 0.42)",
 	  },
@@ -6498,9 +6634,112 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     borderWidth: 1,
     borderColor: theme.colors.border,
   },
+  starButtonCompact: {
+    top: 12,
+    width: 28,
+    height: 28,
+    borderWidth: 0,
+    borderColor: "transparent",
+    backgroundColor: "transparent",
+  },
   starButtonActive: {
     backgroundColor: theme.dark ? "#3a2f16" : "#fff7e0",
     borderColor: theme.colors.warning,
+  },
+  cardCompactSummary: {
+    minWidth: 0,
+    minHeight: 68,
+    paddingLeft: 42,
+    justifyContent: "center",
+    gap: 4,
+  },
+  cardExpandedSummary: {
+    minWidth: 0,
+    minHeight: 44,
+    justifyContent: "center",
+  },
+  cardSummaryPressed: {
+    opacity: 0.68,
+  },
+  compactCardTopRow: {
+    minWidth: 0,
+    minHeight: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  compactCardMetaRow: {
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  compactCardDirectoryRow: {
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  compactStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: theme.radii.full,
+    flexShrink: 0,
+  },
+  compactFieldLabel: {
+    ...theme.typography.meta,
+    width: 52,
+    flexShrink: 0,
+    color: theme.colors.textMuted,
+    fontFamily: "Lato_700Bold",
+    fontSize: 10,
+    lineHeight: 14,
+    letterSpacing: 0.45,
+    textTransform: "uppercase",
+  },
+  compactWindowName: {
+    ...theme.typography.section,
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.text,
+  },
+  compactActivityTime: {
+    ...theme.typography.meta,
+    flexShrink: 0,
+    color: theme.colors.textMuted,
+  },
+  compactStatusText: {
+    ...theme.typography.meta,
+    flexShrink: 0,
+    color: theme.colors.textMuted,
+    fontSize: 9,
+    lineHeight: 12,
+    letterSpacing: 0.35,
+  },
+  compactSessionName: {
+    ...theme.typography.meta,
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.text,
+  },
+  compactMetaDivider: {
+    ...theme.typography.meta,
+    flexShrink: 0,
+    color: theme.colors.border,
+  },
+  compactMachineName: {
+    ...theme.typography.meta,
+    maxWidth: "42%",
+    flexShrink: 1,
+    color: theme.colors.textMuted,
+  },
+  compactDirectory: {
+    ...theme.typography.mono,
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
   },
   cardHeader: {
     flexDirection: "row",
