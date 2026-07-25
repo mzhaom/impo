@@ -86,3 +86,44 @@ describe("Vision text-input guard", () => {
     expect(violations).toEqual([]);
   });
 });
+
+describe("Terminal ANSI rendering", () => {
+  it("keeps terminal output on the styled ANSI renderer instead of a plain TextInput", () => {
+    const terminalOutputs: Array<{ tag: string; contents: string }> = [];
+
+    const visit = (node: ts.Node) => {
+      const opening = ts.isJsxSelfClosingElement(node)
+        ? node
+        : ts.isJsxElement(node)
+          ? node.openingElement
+          : null;
+      const accessibilityLabel = opening?.attributes.properties.find(
+        (attribute) =>
+          ts.isJsxAttribute(attribute) &&
+          attribute.name.getText(appSourceFile) === "accessibilityLabel" &&
+          attribute.initializer &&
+          ts.isStringLiteral(attribute.initializer) &&
+          attribute.initializer.text === "Terminal output",
+      );
+
+      if (opening && accessibilityLabel) {
+        terminalOutputs.push({
+          tag: tagName(opening),
+          contents: node.getText(appSourceFile),
+        });
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(appSourceFile);
+
+    expect(terminalOutputs).toHaveLength(1);
+    expect(terminalOutputs[0].tag).toBe("Text");
+    expect(terminalOutputs[0].contents).toContain("terminalNodes");
+    expect(terminalOutputs[0].contents).not.toContain("terminalPlainText");
+    expect(appSource).toContain(
+      "const terminalNodes = React.useMemo(() => renderAnsiText(terminalText), [terminalText]);",
+    );
+  });
+});
