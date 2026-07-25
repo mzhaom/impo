@@ -127,3 +127,20 @@ describe("Terminal ANSI rendering", () => {
     );
   });
 });
+
+describe("Terminal fullscreen behavior", () => {
+  it("opens windowed and keeps a one-tap close action in fullscreen", () => {
+    expect(appSource).toContain(
+      "const [terminalFullscreen, setTerminalFullscreen] = React.useState(false);",
+    );
+    expect(appSource).not.toContain(
+      "const [terminalFullscreen, setTerminalFullscreen] = React.useState(windowWidth >= 760);",
+    );
+    expect(appSource).toContain(
+      "onCloseTerminal={terminalFullscreen ? closeTerminalModal : undefined}",
+    );
+    expect(appSource).toContain('accessibilityLabel="Close terminal"');
+    expect(appSource).toContain("onClose={closeTerminalModal}");
+    expect(appSource).toContain("setTerminalFullscreen(false);");
+  });
+});

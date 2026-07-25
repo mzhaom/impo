@@ -2945,6 +2945,7 @@ function PaneComposer({
   onClear,
   onRetry,
   onExitFullscreen,
+  onCloseTerminal,
   following = false,
   onToggleFollow,
   recognizing = false,
@@ -2977,6 +2978,7 @@ function PaneComposer({
   onClear?: () => void;
   onRetry?: () => void;
   onExitFullscreen?: () => void;
+  onCloseTerminal?: () => void;
   following?: boolean;
   onToggleFollow?: () => void;
   recognizing?: boolean;
@@ -3108,6 +3110,17 @@ function PaneComposer({
       </Pressable>
     ) : null;
 
+  const closeTerminalButton =
+    expanded && onCloseTerminal ? (
+      <Pressable
+        accessibilityLabel="Close terminal"
+        style={styles.paneComposerFullscreenExitButton}
+        onPress={onCloseTerminal}
+      >
+        <X size={17} color={theme.colors.danger} />
+      </Pressable>
+    ) : null;
+
   const followButton =
     expanded && onToggleFollow ? (
       <Pressable
@@ -3199,6 +3212,15 @@ function PaneComposer({
               onPress={onExitFullscreen}
             >
               <Minimize2 size={24} color={theme.colors.text} />
+            </Pressable>
+          ) : null}
+          {onCloseTerminal ? (
+            <Pressable
+              accessibilityLabel="Close terminal"
+              style={styles.visionComposerSquareButton}
+              onPress={onCloseTerminal}
+            >
+              <X size={24} color={theme.colors.danger} />
             </Pressable>
           ) : null}
           <Pressable
@@ -3389,6 +3411,7 @@ function PaneComposer({
             {input}
             <View style={styles.paneComposerInlineActions}>
               {exitFullscreenButton}
+              {closeTerminalButton}
               {uploadButton}
               {voiceButton}
               {keysButton}
@@ -3945,7 +3968,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const [terminalUploading, setTerminalUploading] = React.useState(false);
   const [terminalAutoRefresh, setTerminalAutoRefresh] = React.useState(true);
   const [terminalFollow, setTerminalFollow] = React.useState(true);
-  const [terminalFullscreen, setTerminalFullscreen] = React.useState(windowWidth >= 760);
+  const [terminalFullscreen, setTerminalFullscreen] = React.useState(false);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -3999,10 +4022,10 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     const previousTargetKey = previousTerminalTargetKeyRef.current;
     previousTerminalTargetKeyRef.current = terminalTargetKey;
     if (terminalTargetKey && terminalTargetKey !== previousTargetKey) {
-      setTerminalFullscreen(windowWidth >= 760);
+      setTerminalFullscreen(false);
       setTerminalFollow(terminalAutoRefresh);
     }
-  }, [terminalAutoRefresh, terminalTargetKey, windowWidth]);
+  }, [terminalAutoRefresh, terminalTargetKey]);
 
   React.useEffect(() => {
     return () => {
@@ -4346,17 +4369,17 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     setTerminalFullscreen(false);
   }, []);
 
+  const closeTerminalModal = React.useCallback(() => {
+    Keyboard.dismiss();
+    setTerminalFullscreen(false);
+    onClose();
+  }, [onClose]);
+
   return (
     <SheetModal
       visible={Boolean(target)}
       title="Terminal"
-      onClose={() => {
-        if (terminalFullscreen) {
-          exitTerminalFullscreen();
-          return;
-        }
-        onClose();
-      }}
+      onClose={closeTerminalModal}
       tall
       wide
       fullscreen={terminalFullscreen}
@@ -4467,6 +4490,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         }}
         onRetry={() => sendTerminalInput({ submit: true })}
         onExitFullscreen={terminalFullscreen ? exitTerminalFullscreen : undefined}
+        onCloseTerminal={terminalFullscreen ? closeTerminalModal : undefined}
         following={terminalFollow}
         onToggleFollow={terminalFullscreen && Platform.OS === "ios" ? toggleTerminalFollow : undefined}
         recognizing={terminalVoiceInput.active}
