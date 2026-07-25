@@ -59,7 +59,8 @@ export function resolvePaneComposerPresentation({
     showVoice: true,
     showKeys: true,
     showSend: true,
-    showQuickKeys: visionControls,
+    showQuickKeys: false,
+    showMore: visionControls,
   };
 }
 

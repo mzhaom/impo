@@ -2362,45 +2362,48 @@ function UpdateInfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function VoiceWaveform() {
+function VoiceWaveform({ prominent = false }: { prominent?: boolean }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
-  const bars = React.useRef([0, 1, 2, 3, 4].map(() => new Animated.Value(0.35))).current;
+  const bars = React.useRef([0, 1, 2, 3, 4, 5, 6].map(() => new Animated.Value(0.18))).current;
+  const barShape = React.useRef([0.52, 0.78, 0.92, 1, 0.88, 0.7, 0.48]).current;
+
+  useSpeechRecognitionEvent("volumechange", (event) => {
+    const rawLevel = Number(event.value);
+    const level = Number.isFinite(rawLevel) && rawLevel > 0
+      ? Math.min(rawLevel / 10, 1)
+      : 0;
+    Animated.parallel(
+      bars.map((bar, index) =>
+        Animated.timing(bar, {
+          toValue: 0.18 + level * 0.82 * barShape[index],
+          duration: 90,
+          useNativeDriver: true,
+        }),
+      ),
+    ).start();
+  });
 
   React.useEffect(() => {
-    const animation = Animated.loop(
-      Animated.stagger(
-        70,
-        bars.map((bar, index) =>
-          Animated.sequence([
-            Animated.timing(bar, {
-              toValue: index % 2 === 0 ? 1 : 0.78,
-              duration: 180,
-              useNativeDriver: true,
-            }),
-            Animated.timing(bar, {
-              toValue: 0.35,
-              duration: 220,
-              useNativeDriver: true,
-            }),
-          ]),
-        ),
-      ),
-    );
-    animation.start();
     return () => {
-      animation.stop();
-      bars.forEach((bar) => bar.setValue(0.35));
+      bars.forEach((bar) => {
+        bar.stopAnimation();
+        bar.setValue(0.18);
+      });
     };
   }, [bars]);
 
   return (
-    <View style={styles.voiceWaveform} pointerEvents="none">
+    <View
+      style={[styles.voiceWaveform, prominent ? styles.voiceWaveformProminent : null]}
+      pointerEvents="none"
+    >
       {bars.map((bar, index) => (
         <Animated.View
           key={index}
           style={[
             styles.voiceWaveformBar,
+            prominent ? styles.voiceWaveformBarProminent : null,
             {
               backgroundColor: theme.colors.accent,
               transform: [{ scaleY: bar }],
@@ -2458,6 +2461,8 @@ function useServerVoiceInput({
   const modeRef = React.useRef<ServerVoiceMode>("idle");
   const audioUriRef = React.useRef("");
   const lastTranscribedUriRef = React.useRef("");
+  const heardSpeechRef = React.useRef(false);
+  const audibleFrameCountRef = React.useRef(0);
   const scopeKeyRef = React.useRef(scopeKey);
   const requestGenerationRef = React.useRef(0);
 
@@ -2473,6 +2478,8 @@ function useServerVoiceInput({
         activeRef.current = false;
         audioUriRef.current = "";
         lastTranscribedUriRef.current = "";
+        heardSpeechRef.current = false;
+        audibleFrameCountRef.current = 0;
         setMode("idle");
         safelyAbortVoiceRecognition();
       }
@@ -2514,6 +2521,14 @@ function useServerVoiceInput({
       onStatus("Voice recording was not saved");
       return;
     }
+    if (!heardSpeechRef.current) {
+      activeRef.current = false;
+      audioUriRef.current = "";
+      audibleFrameCountRef.current = 0;
+      setMode("idle");
+      onStatus("No speech detected");
+      return;
+    }
     if (lastTranscribedUriRef.current === audioUri) return;
     lastTranscribedUriRef.current = audioUri;
     onStatus("Transcribing...");
@@ -2552,6 +2567,8 @@ function useServerVoiceInput({
       ) {
         activeRef.current = false;
         audioUriRef.current = "";
+        heardSpeechRef.current = false;
+        audibleFrameCountRef.current = 0;
         setMode("idle");
       }
     }
@@ -2566,6 +2583,17 @@ function useServerVoiceInput({
   useSpeechRecognitionEvent("audiostart", (event) => {
     if (!activeRef.current) return;
     audioUriRef.current = event.uri || "";
+  });
+
+  useSpeechRecognitionEvent("volumechange", (event) => {
+    if (!activeRef.current) return;
+    const volume = Number(event.value);
+    if (Number.isFinite(volume) && volume > 0) {
+      audibleFrameCountRef.current += 1;
+      if (audibleFrameCountRef.current >= 3) heardSpeechRef.current = true;
+      return;
+    }
+    audibleFrameCountRef.current = 0;
   });
 
   useSpeechRecognitionEvent("audioend", (event) => {
@@ -2585,6 +2613,8 @@ function useServerVoiceInput({
     if (!activeRef.current) return;
     activeRef.current = false;
     audioUriRef.current = "";
+    heardSpeechRef.current = false;
+    audibleFrameCountRef.current = 0;
     setMode("idle");
     onStatus(event.message || `Voice input failed: ${event.error}`);
   });
@@ -2629,15 +2659,22 @@ function useServerVoiceInput({
     activeRef.current = true;
     audioUriRef.current = "";
     lastTranscribedUriRef.current = "";
+    heardSpeechRef.current = false;
+    audibleFrameCountRef.current = 0;
     setMode("recording");
     try {
       ExpoSpeechRecognitionModule.start({
         lang: "zh-CN",
         interimResults: false,
         maxAlternatives: 1,
-        continuous: false,
+        continuous: true,
         addsPunctuation: true,
+        iosTaskHint: "dictation",
         contextualStrings: [...contextualStrings],
+        volumeChangeEventOptions: {
+          enabled: true,
+          intervalMillis: 100,
+        },
         recordingOptions: {
           persist: true,
           outputFileName: `cjmux-voice-${Date.now()}.wav`,
@@ -2675,6 +2712,7 @@ function useLocalVoiceInput({
   const [active, setActiveState] = React.useState(false);
   const activeRef = React.useRef(false);
   const receivedResultRef = React.useRef(false);
+  const transcriptRef = React.useRef("");
   const scopeKeyRef = React.useRef(scopeKey);
   const requestGenerationRef = React.useRef(0);
 
@@ -2710,14 +2748,15 @@ function useLocalVoiceInput({
 
   useSpeechRecognitionEvent("result", (event) => {
     if (!activeRef.current || !event.isFinal) return;
-    const transcript = String(event.results[0]?.transcript || "").trim();
-    receivedResultRef.current = Boolean(transcript);
-    setActive(false);
-    if (!transcript) {
-      onStatus("No speech detected");
-      return;
-    }
-    onText(transcript);
+    const rawTranscript = String(event.results[0]?.transcript || "");
+    const transcript = rawTranscript.trim();
+    if (!transcript) return;
+    transcriptRef.current =
+      transcriptRef.current && /^\s/.test(rawTranscript)
+        ? `${transcriptRef.current} ${transcript}`
+        : transcript;
+    receivedResultRef.current = true;
+    onText(transcriptRef.current);
     onStatus("Voice added");
     void Haptics.selectionAsync();
   });
@@ -2759,15 +2798,21 @@ function useLocalVoiceInput({
       return;
     }
     receivedResultRef.current = false;
+    transcriptRef.current = "";
     setActive(true);
     try {
       ExpoSpeechRecognitionModule.start({
         lang: "zh-CN",
         interimResults: false,
         maxAlternatives: 1,
-        continuous: false,
+        continuous: true,
         addsPunctuation: true,
+        iosTaskHint: "dictation",
         contextualStrings: [...contextualStrings],
+        volumeChangeEventOptions: {
+          enabled: true,
+          intervalMillis: 100,
+        },
       });
     } catch (error) {
       setActive(false);
@@ -2829,9 +2874,12 @@ function VoiceValueField({
           onPress={onToggle}
         >
           {active ? (
-            <MicOff size={24} color={theme.colors.accent} />
+            <>
+              <MicOff size={20} color={theme.colors.accent} />
+              <VoiceWaveform />
+            </>
           ) : (
-            <Mic size={24} color={theme.colors.text} />
+            <Mic size={22} color={theme.colors.text} />
           )}
           <Text
             style={[
@@ -3023,10 +3071,15 @@ function PaneComposer({
   const [snippetSheetVisible, setSnippetSheetVisible] = React.useState(false);
   const [snippetDraftItems, setSnippetDraftItems] = React.useState<UserSnippetItem[]>([]);
   const [snippetNewText, setSnippetNewText] = React.useState("");
+  const [visionMoreVisible, setVisionMoreVisible] = React.useState(false);
   const snippetItems = React.useMemo(() => {
     const loaded = cleanSnippetItems(snippets.data?.items);
     return loaded.length > 0 ? loaded : FALLBACK_SNIPPETS;
   }, [snippets.data?.items]);
+
+  React.useEffect(() => {
+    if (!visionControls) setVisionMoreVisible(false);
+  }, [visionControls]);
 
   const openSnippetManager = React.useCallback(() => {
     setSnippetDraftItems(snippetItems);
@@ -3205,24 +3258,6 @@ function PaneComposer({
           </Text>
         </View>
         <View style={styles.visionComposerPrimaryRow}>
-          {onExitFullscreen ? (
-            <Pressable
-              accessibilityLabel="Exit fullscreen terminal"
-              style={styles.visionComposerSquareButton}
-              onPress={onExitFullscreen}
-            >
-              <Minimize2 size={24} color={theme.colors.text} />
-            </Pressable>
-          ) : null}
-          {onCloseTerminal ? (
-            <Pressable
-              accessibilityLabel="Close terminal"
-              style={styles.visionComposerSquareButton}
-              onPress={onCloseTerminal}
-            >
-              <X size={24} color={theme.colors.danger} />
-            </Pressable>
-          ) : null}
           <Pressable
             accessibilityLabel={recognizing ? "Stop voice input" : "Start voice input"}
             style={[
@@ -3234,9 +3269,9 @@ function PaneComposer({
             onPress={onToggleVoice}
           >
             {recognizing ? (
-              <VoiceWaveform />
+              <VoiceWaveform prominent />
             ) : (
-              <Mic size={25} color={iconColor} />
+              <Mic size={22} color={iconColor} />
             )}
             <Text
               style={[
@@ -3260,7 +3295,7 @@ function PaneComposer({
                 void Haptics.selectionAsync();
               }}
             >
-              <X size={24} color={!value || controlDisabled ? theme.colors.textMuted : theme.colors.text} />
+              <X size={21} color={!value || controlDisabled ? theme.colors.textMuted : theme.colors.text} />
             </Pressable>
           ) : null}
           <Pressable
@@ -3281,53 +3316,111 @@ function PaneComposer({
             {sendBusy || keyBusy ? (
               <ActivityIndicator color={theme.colors.surfaceRaised} />
             ) : (
-              <Send size={24} color={theme.colors.surfaceRaised} />
+              <Send size={21} color={theme.colors.surfaceRaised} />
             )}
             <Text style={styles.visionComposerSendText}>
               {value.trim() ? "Send" : "Enter"}
             </Text>
           </Pressable>
-        </View>
-        <View style={styles.visionQuickKeyGrid}>
-          {VISION_QUICK_KEYS.map((entry) => (
+          {presentation.showMore ? (
             <Pressable
-              key={entry.label}
-              accessibilityLabel={`Send ${entry.label} terminal key`}
+              accessibilityLabel={visionMoreVisible ? "Hide more controls" : "Show more controls"}
+              accessibilityState={{ expanded: visionMoreVisible }}
               style={[
-                styles.visionQuickKeyButton,
-                entry.danger ? styles.keyButtonDanger : null,
-                controlDisabled || !onQuickKey ? styles.disabledButton : null,
+                styles.visionComposerMoreButton,
+                visionMoreVisible ? styles.paneComposerInlineButtonActive : null,
               ]}
-              disabled={controlDisabled || !onQuickKey}
-              onPress={() => {
-                onQuickKey?.(entry);
-                void Haptics.selectionAsync();
-              }}
+              onPress={() => setVisionMoreVisible((current) => !current)}
             >
+              <MoreVertical
+                size={20}
+                color={visionMoreVisible ? activeIconColor : theme.colors.text}
+              />
               <Text
                 style={[
-                  styles.visionQuickKeyText,
-                  entry.danger ? styles.keyButtonTextDanger : null,
+                  styles.visionComposerMoreButtonText,
+                  visionMoreVisible ? styles.paneComposerToolButtonTextActive : null,
                 ]}
               >
-                {entry.label}
+                {visionMoreVisible ? "Less" : "More"}
               </Text>
             </Pressable>
-          ))}
-          <Pressable
-            accessibilityLabel="Open all terminal keys"
-            style={[
-              styles.visionQuickKeyButton,
-              controlDisabled ? styles.disabledButton : null,
-            ]}
-            disabled={controlDisabled}
-            onPress={onOpenKeys}
-          >
-            <Terminal size={22} color={iconColor} />
-            <Text style={styles.visionQuickKeyText}>More</Text>
-          </Pressable>
+          ) : null}
         </View>
-        {followButton}
+        {visionMoreVisible ? (
+          <View style={styles.visionMorePanel}>
+            {onExitFullscreen || onCloseTerminal || followButton ? (
+              <View style={styles.visionMoreActionRow}>
+                {onExitFullscreen ? (
+                  <Pressable
+                    accessibilityLabel="Exit fullscreen terminal"
+                    style={styles.visionComposerSquareButton}
+                    onPress={() => {
+                      setVisionMoreVisible(false);
+                      onExitFullscreen();
+                    }}
+                  >
+                    <Minimize2 size={21} color={theme.colors.text} />
+                  </Pressable>
+                ) : null}
+                {onCloseTerminal ? (
+                  <Pressable
+                    accessibilityLabel="Close terminal"
+                    style={styles.visionComposerSquareButton}
+                    onPress={() => {
+                      setVisionMoreVisible(false);
+                      onCloseTerminal();
+                    }}
+                  >
+                    <X size={21} color={theme.colors.danger} />
+                  </Pressable>
+                ) : null}
+                {followButton}
+              </View>
+            ) : null}
+            {presentation.showQuickKeys || visionMoreVisible ? (
+              <View style={styles.visionQuickKeyGrid}>
+                {VISION_QUICK_KEYS.map((entry) => (
+                  <Pressable
+                    key={entry.label}
+                    accessibilityLabel={`Send ${entry.label} terminal key`}
+                    style={[
+                      styles.visionQuickKeyButton,
+                      entry.danger ? styles.keyButtonDanger : null,
+                      controlDisabled || !onQuickKey ? styles.disabledButton : null,
+                    ]}
+                    disabled={controlDisabled || !onQuickKey}
+                    onPress={() => {
+                      onQuickKey?.(entry);
+                      void Haptics.selectionAsync();
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.visionQuickKeyText,
+                        entry.danger ? styles.keyButtonTextDanger : null,
+                      ]}
+                    >
+                      {entry.label}
+                    </Text>
+                  </Pressable>
+                ))}
+                <Pressable
+                  accessibilityLabel="Open all terminal keys"
+                  style={[
+                    styles.visionQuickKeyButton,
+                    controlDisabled ? styles.disabledButton : null,
+                  ]}
+                  disabled={controlDisabled}
+                  onPress={onOpenKeys}
+                >
+                  <Terminal size={19} color={iconColor} />
+                  <Text style={styles.visionQuickKeyText}>All keys</Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         {reserveStatusSpace || status || error ? (
           <Text style={styles.paneComposerStatus} numberOfLines={2}>
             {status || error || ""}
@@ -6909,13 +7002,13 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     minWidth: 0,
     flexDirection: "row",
     alignItems: "stretch",
-    gap: 12,
+    gap: 8,
   },
   visionVoiceButton: {
     flex: 1,
     minWidth: 0,
-    minHeight: 64,
-    paddingHorizontal: 16,
+    minHeight: 52,
+    paddingHorizontal: 12,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -6923,7 +7016,7 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 10,
+    gap: 8,
   },
   visionVoiceButtonActive: {
     borderColor: theme.colors.accent,
@@ -6937,8 +7030,8 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     color: theme.colors.accent,
   },
   visionVoiceClearButton: {
-    width: 64,
-    height: 64,
+    width: 52,
+    height: 52,
     flexShrink: 0,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
@@ -6955,18 +7048,18 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   visionPaneComposer: {
     width: "100%",
     minWidth: 0,
-    gap: 12,
+    gap: 8,
   },
   visionDraftPreview: {
     width: "100%",
     minWidth: 0,
-    minHeight: 72,
+    minHeight: 56,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceRaised,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     justifyContent: "center",
   },
   visionDraftPreviewText: {
@@ -6981,12 +7074,12 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     minWidth: 0,
     flexDirection: "row",
     flexWrap: "wrap",
-    alignItems: "stretch",
-    gap: 12,
+    alignItems: "center",
+    gap: 8,
   },
   visionComposerSquareButton: {
-    width: 64,
-    height: 64,
+    width: 52,
+    height: 52,
     flexShrink: 0,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
@@ -6997,10 +7090,10 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   },
   visionComposerVoiceButton: {
     flexGrow: 1,
-    flexBasis: 160,
-    minWidth: 150,
-    minHeight: 64,
-    paddingHorizontal: 16,
+    flexBasis: 130,
+    minWidth: 112,
+    minHeight: 52,
+    paddingHorizontal: 12,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -7008,42 +7101,72 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 10,
+    gap: 8,
   },
   visionComposerSendButton: {
-    minWidth: 120,
-    minHeight: 64,
-    paddingHorizontal: 18,
+    minWidth: 96,
+    minHeight: 52,
+    paddingHorizontal: 14,
     borderRadius: theme.radii.lg,
     backgroundColor: theme.colors.accent,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 9,
+    gap: 7,
   },
   visionComposerButtonText: {
     ...theme.typography.section,
-    fontSize: 17,
+    fontSize: 16,
     color: theme.colors.text,
   },
   visionComposerSendText: {
     ...theme.typography.section,
-    fontSize: 17,
+    fontSize: 16,
     color: theme.colors.surfaceRaised,
+  },
+  visionComposerMoreButton: {
+    minWidth: 76,
+    minHeight: 52,
+    paddingHorizontal: 10,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  visionComposerMoreButtonText: {
+    ...theme.typography.meta,
+    fontFamily: "Lato_700Bold",
+    color: theme.colors.text,
+  },
+  visionMorePanel: {
+    width: "100%",
+    minWidth: 0,
+    gap: 8,
+  },
+  visionMoreActionRow: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   visionQuickKeyGrid: {
     width: "100%",
     minWidth: 0,
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 12,
+    gap: 8,
   },
   visionQuickKeyButton: {
     flexGrow: 1,
-    flexBasis: "28%",
-    minWidth: 90,
-    minHeight: 64,
-    paddingHorizontal: 12,
+    flexBasis: "22%",
+    minWidth: 72,
+    minHeight: 50,
+    paddingHorizontal: 10,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -7053,14 +7176,14 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   },
   visionQuickKeyText: {
     ...theme.typography.section,
-    fontSize: 18,
+    fontSize: 16,
     color: theme.colors.text,
   },
   visionFollowButton: {
     flexGrow: 1,
-    minWidth: 140,
-    minHeight: 64,
-    paddingHorizontal: 16,
+    minWidth: 120,
+    minHeight: 52,
+    paddingHorizontal: 12,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -7068,19 +7191,19 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 9,
+    gap: 7,
   },
   visionFollowButtonText: {
     ...theme.typography.section,
-    fontSize: 17,
+    fontSize: 16,
     color: theme.colors.text,
   },
   visionRetryButton: {
-    minHeight: 60,
-    paddingHorizontal: 16,
+    minHeight: 48,
+    paddingHorizontal: 14,
   },
   visionSubmitButton: {
-    minHeight: 64,
+    minHeight: 54,
   },
   paneComposerCompactRow: {
     width: "100%",
@@ -7408,10 +7531,18 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     alignItems: "center",
     gap: 2,
   },
+  voiceWaveformProminent: {
+    height: 24,
+    gap: 3,
+  },
   voiceWaveformBar: {
     width: 3,
     height: 14,
     borderRadius: theme.radii.full,
+  },
+  voiceWaveformBarProminent: {
+    width: 4,
+    height: 21,
   },
   retryRow: {
     width: "100%",
@@ -7466,9 +7597,9 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     justifyContent: "center",
   },
   visionKeyButton: {
-    minWidth: 72,
-    height: 64,
-    paddingHorizontal: 16,
+    minWidth: 64,
+    height: 52,
+    paddingHorizontal: 12,
   },
   keyButtonDanger: {
     borderColor: theme.colors.danger,
@@ -7479,7 +7610,7 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   },
   visionKeyButtonText: {
     ...theme.typography.section,
-    fontSize: 18,
+    fontSize: 16,
   },
   keyButtonTextDanger: {
     color: theme.colors.danger,

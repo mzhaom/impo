@@ -68,7 +68,8 @@ describe("resolvePaneComposerPresentation", () => {
       showVoice: true,
       showKeys: true,
       showSend: true,
-      showQuickKeys: true,
+      showQuickKeys: false,
+      showMore: true,
     });
   });
 
@@ -84,6 +85,7 @@ describe("resolvePaneComposerPresentation", () => {
       showShortcuts: true,
       showUpload: true,
       showQuickKeys: false,
+      showMore: false,
     });
   });
 });
