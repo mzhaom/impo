@@ -1,4 +1,6 @@
 PODS:
+  - CJMUXKeyboardShortcuts (1.0.0):
+    - ExpoModulesCore
   - CJMUXVisionDevice (1.0.0):
     - ExpoModulesCore
   - EASClient (57.0.0):
@@ -184,7 +186,9 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - ExpoAsset (57.0.3):
+  - ExpoAsset (57.0.7):
+    - ExpoModulesCore
+  - ExpoAudio (57.0.3):
     - ExpoModulesCore
   - ExpoClipboard (57.0.0):
     - ExpoModulesCore
@@ -2565,6 +2569,7 @@ PODS:
   - Yoga (0.0.0)
 
 DEPENDENCIES:
+  - CJMUXKeyboardShortcuts (from `../modules/cjmux-keyboard-shortcuts/ios`)
   - CJMUXVisionDevice (from `../modules/cjmux-vision-device/ios`)
   - EASClient (from `../node_modules/expo-eas-client/ios`)
   - EXApplication (from `../node_modules/expo-application/ios`)
@@ -2577,6 +2582,7 @@ DEPENDENCIES:
   - expo-dev-menu (from `../node_modules/expo-dev-menu`)
   - expo-dev-menu-interface (from `../node_modules/expo-dev-menu-interface/ios`)
   - ExpoAsset (from `../node_modules/expo-asset/ios`)
+  - ExpoAudio (from `../node_modules/expo-audio/ios`)
   - ExpoClipboard (from `../node_modules/expo-clipboard/ios`)
   - ExpoDocumentPicker (from `../node_modules/expo-document-picker/ios`)
   - "ExpoDomWebView (from `../node_modules/@expo/dom-webview/ios`)"
@@ -2695,6 +2701,8 @@ SPEC REPOS:
     - ReachabilitySwift
 
 EXTERNAL SOURCES:
+  CJMUXKeyboardShortcuts:
+    :path: "../modules/cjmux-keyboard-shortcuts/ios"
   CJMUXVisionDevice:
     :path: "../modules/cjmux-vision-device/ios"
   EASClient:
@@ -2719,6 +2727,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-dev-menu-interface/ios"
   ExpoAsset:
     :path: "../node_modules/expo-asset/ios"
+  ExpoAudio:
+    :path: "../node_modules/expo-audio/ios"
   ExpoClipboard:
     :path: "../node_modules/expo-clipboard/ios"
   ExpoDocumentPicker:
@@ -2944,6 +2954,7 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
+  CJMUXKeyboardShortcuts: 46f3febdf83b1f96ee2eca18463f445aef2cc664
   CJMUXVisionDevice: b2b0914bacd4538937e0e7031fcbeed675a45d44
   EASClient: 7d3aa729ae2cd433b5bc314a6d3543fad381fa1c
   EXApplication: 7283a281903a90230466ab545ab87a8c48cf4e12
@@ -2955,7 +2966,8 @@ SPEC CHECKSUMS:
   expo-dev-launcher: 3a5012ec6e2fe5488b3ab1c2a44fb2fcde74b02e
   expo-dev-menu: ec44430d95774d757adc9524fc4a755b8bd8e6c1
   expo-dev-menu-interface: 7a59e803916fbfd1b96c75ff91ea8dddac7e722f
-  ExpoAsset: 586e89aeaab2e23bfa90b9dce4d7d5e36815c039
+  ExpoAsset: 98143758ff37e14c9ff2a4e7673097db00473011
+  ExpoAudio: b69f36525132edba8d87a715b3a20c678ef78b30
   ExpoClipboard: 67d46a8be4a50ec610c7b2f4966c0475aec6d969
   ExpoDocumentPicker: 1160f4221c6ed4fed906aad0761549ea163b7a01
   ExpoDomWebView: 73ba90107a5acc0017a09b06e66d8eb238e089b8

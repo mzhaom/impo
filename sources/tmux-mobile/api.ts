@@ -32,6 +32,16 @@ export interface TranscribeAudioResponse {
   model?: string;
 }
 
+export interface WindowAudioSummaryResponse {
+  summary?: string;
+  audioBase64?: string;
+  mimeType?: string;
+  paneId?: string;
+  windowId?: string;
+  speechModel?: string;
+  voice?: string;
+}
+
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const bytes = toByteArray(base64);
   const buffer = new ArrayBuffer(bytes.byteLength);
@@ -74,6 +84,7 @@ interface RequestOptions {
   token?: string;
   machineId?: string;
   headers?: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 export class TmuxMobileApi {
@@ -123,6 +134,7 @@ export class TmuxMobileApi {
         method: options.method || (body === undefined ? "GET" : "POST"),
         headers,
         body,
+        signal: options.signal,
       });
     } catch (error) {
       throw new ApiError(
@@ -337,6 +349,29 @@ export class TmuxMobileApi {
   transcript(machineId: string, paneId: string): Promise<AgentTranscriptResponse> {
     const params = new URLSearchParams({ paneId });
     return this.request(`/api/agent-transcript?${params.toString()}`, { machineId });
+  }
+
+  windowAudioSummary(input: {
+    machineId: string;
+    mux?: string;
+    paneId?: string;
+    windowId?: string;
+    lines?: number;
+    signal?: AbortSignal;
+  }): Promise<WindowAudioSummaryResponse> {
+    return this.request("/api/window-audio-summary", {
+      method: "POST",
+      machineId: input.machineId,
+      headers: {
+        "x-mux": input.mux || "tmux",
+      },
+      body: {
+        paneId: input.paneId || "",
+        windowId: input.windowId || "",
+        lines: input.lines,
+      },
+      signal: input.signal,
+    });
   }
 
   startAgent(input: {

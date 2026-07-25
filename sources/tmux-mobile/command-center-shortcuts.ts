@@ -4,9 +4,12 @@ export type CommandCenterShortcut =
   | { type: "move"; direction: CommandCenterShortcutDirection }
   | { type: "view" }
   | { type: "reply" }
+  | { type: "read" }
+  | { type: "stop-reading" }
   | { type: "response" }
   | { type: "transcript" }
   | { type: "refresh" }
+  | { type: "search" }
   | { type: "escape" };
 
 export type CommandCenterShortcutEvent = {
@@ -16,6 +19,9 @@ export type CommandCenterShortcutEvent = {
   altKey?: boolean;
   shiftKey?: boolean;
   repeat?: boolean;
+  defaultPrevented?: boolean;
+  isComposing?: boolean;
+  editableTarget?: boolean;
 };
 
 const DIRECTION_BY_KEY: Readonly<
@@ -36,7 +42,8 @@ function opensModal(shortcut: CommandCenterShortcut): boolean {
     shortcut.type === "view" ||
     shortcut.type === "reply" ||
     shortcut.type === "response" ||
-    shortcut.type === "transcript"
+    shortcut.type === "transcript" ||
+    shortcut.type === "search"
   );
 }
 
@@ -44,7 +51,24 @@ export function resolveCommandCenterShortcut(
   event: CommandCenterShortcutEvent,
 ): CommandCenterShortcut | null {
   const key = String(event.key || "");
-  if (!key || event.ctrlKey || event.metaKey || event.altKey) return null;
+  const lowered = key.toLowerCase();
+  if (
+    !key ||
+    event.defaultPrevented ||
+    event.isComposing ||
+    event.altKey
+  ) {
+    return null;
+  }
+
+  if (
+    lowered === "k" &&
+    !event.shiftKey &&
+    Boolean(event.ctrlKey || event.metaKey)
+  ) {
+    return event.repeat ? null : { type: "search" };
+  }
+  if (event.editableTarget || event.ctrlKey || event.metaKey) return null;
 
   let shortcut: CommandCenterShortcut | null = null;
   if (key === "Escape") {
@@ -54,11 +78,14 @@ export function resolveCommandCenterShortcut(
     if (direction) {
       shortcut = { type: "move", direction };
     } else {
-      const lowered = key.toLowerCase();
-      if (key === "Enter" || lowered === "o") {
+      if (lowered === "o") {
         shortcut = { type: "view" };
       } else if (lowered === "r") {
         shortcut = { type: "reply" };
+      } else if (lowered === "i") {
+        shortcut = { type: "read" };
+      } else if (lowered === "s") {
+        shortcut = { type: "stop-reading" };
       } else if (lowered === "f") {
         shortcut = { type: "response" };
       } else if (lowered === "t") {

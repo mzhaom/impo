@@ -2,7 +2,7 @@ const variant = process.env.APP_ENV || "development";
 const updateChannel = process.env.EAS_UPDATE_CHANNEL || (variant === "production" ? "production" : variant);
 const buildTime = process.env.BUILD_TIME || new Date().toISOString();
 const jsVersion = process.env.JS_UPDATE_VERSION || buildTime.replace(/[-:T]/g, "").slice(0, 12);
-const runtimeVersion = process.env.CJMUX_RUNTIME_VERSION || "2";
+const runtimeVersion = process.env.CJMUX_RUNTIME_VERSION || "3";
 
 export default {
   expo: {
@@ -60,6 +60,8 @@ export default {
       ],
       "expo-secure-store",
       "expo-font",
+      "expo-asset",
+      "expo-audio",
       "expo-web-browser",
       [
         "expo-speech-recognition",

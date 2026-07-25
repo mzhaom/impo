@@ -17,7 +17,7 @@ interface AuthState {
   error: string;
   baseUrl: string;
   setBaseUrl: (url: string) => void;
-  signIn: () => Promise<void>;
+  signIn: (baseUrlOverride?: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -113,13 +113,15 @@ export function TmuxMobileAuthProvider({ children }: { children: React.ReactNode
     setBaseUrlState(normalizeBaseUrl(url));
   }, []);
 
-  const signIn = React.useCallback(async () => {
+  const signIn = React.useCallback(async (baseUrlOverride?: string) => {
     setSigningIn(true);
     setError("");
     setChallenge(null);
     setCodeCopied(false);
     try {
-      const api = new TmuxMobileApi(baseUrl);
+      const requestedBaseUrl = normalizeBaseUrl(baseUrlOverride || baseUrl);
+      setBaseUrlState(requestedBaseUrl);
+      const api = new TmuxMobileApi(requestedBaseUrl);
       const start = await api.startDeviceLogin();
       const copied = await copyUserCode(start);
       setCodeCopied(copied);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   resolveCommandCenterShortcut,
   type CommandCenterShortcutEvent,
@@ -26,11 +27,14 @@ describe("resolveCommandCenterShortcut", () => {
   });
 
   it.each([
-    ["Enter", { type: "view" }],
     ["o", { type: "view" }],
     ["O", { type: "view" }],
     ["r", { type: "reply" }],
     ["R", { type: "reply" }],
+    ["i", { type: "read" }],
+    ["I", { type: "read" }],
+    ["s", { type: "stop-reading" }],
+    ["S", { type: "stop-reading" }],
     ["f", { type: "response" }],
     ["F", { type: "response" }],
     ["t", { type: "transcript" }],
@@ -66,10 +70,37 @@ describe("resolveCommandCenterShortcut", () => {
     },
   );
 
-  it.each(["Enter", "o", "r", "f", "t"])(
+  it.each(["o", "r", "f", "t"])(
     "ignores repeated modal-opening %s shortcuts",
     (key) => {
       expect(resolveCommandCenterShortcut({ key, repeat: true })).toBeNull();
+    },
+  );
+
+  it("allows repeated read-aloud so it can toggle the current read like Web", () => {
+    expect(resolveCommandCenterShortcut({ key: "i", repeat: true })).toEqual({
+      type: "read",
+    });
+  });
+
+  it.each([
+    { key: "k", metaKey: true },
+    { key: "K", ctrlKey: true },
+  ] satisfies CommandCenterShortcutEvent[])(
+    "maps Web card search modifiers",
+    (event) => {
+      expect(resolveCommandCenterShortcut(event)).toEqual({ type: "search" });
+    },
+  );
+
+  it.each([
+    { key: "k", metaKey: true, shiftKey: true },
+    { key: "k", ctrlKey: true, altKey: true },
+    { key: "k", metaKey: true, repeat: true },
+  ] satisfies CommandCenterShortcutEvent[])(
+    "rejects non-Web card search modifier variants",
+    (event) => {
+      expect(resolveCommandCenterShortcut(event)).toBeNull();
     },
   );
 
@@ -82,17 +113,58 @@ describe("resolveCommandCenterShortcut", () => {
     ).toEqual({ type: "move", direction: "right" });
   });
 
-  it("uses the same normalized event contract for Web and iPad callers", () => {
-    const webEvent: CommandCenterShortcutEvent = { key: "r", repeat: false };
-    const ipadEvent: CommandCenterShortcutEvent = { key: "r", repeat: false };
+  it.each([
+    ["already prevented", { key: "r", defaultPrevented: true }],
+    ["IME composition", { key: "r", isComposing: true }],
+    ["editable target", { key: "r", editableTarget: true }],
+  ] satisfies ReadonlyArray<readonly [string, CommandCenterShortcutEvent]>)(
+    "does not claim a shortcut from %s",
+    (_label, event) => {
+      expect(resolveCommandCenterShortcut(event)).toBeNull();
+    },
+  );
 
-    expect(resolveCommandCenterShortcut(webEvent)).toEqual({ type: "reply" });
-    expect(resolveCommandCenterShortcut(ipadEvent)).toEqual(
-      resolveCommandCenterShortcut(webEvent),
+  it("keeps the iPad native bridge on the Web shortcut key contract", () => {
+    const swift = readFileSync(
+      new URL(
+        "../../modules/cjmux-keyboard-shortcuts/ios/CJMUXKeyboardShortcutsModule.swift",
+        import.meta.url,
+      ),
+      "utf8",
     );
+    const registeredKeys = new Set(
+      [...swift.matchAll(/ShortcutKey\(input: [^,]+, key: "([^"]+)"\)/g)].map(
+        (match) => match[1],
+      ),
+    );
+
+    expect(registeredKeys).toEqual(
+      new Set([
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "h",
+        "j",
+        "k",
+        "l",
+        "u",
+        "r",
+        "i",
+        "s",
+        "o",
+        "f",
+        "t",
+        "Escape",
+      ]),
+    );
+    expect(swift).toContain(".command,");
+    expect(swift).toContain(".control,");
+    expect(swift).toContain("[.command, .control],");
+    expect(swift).not.toContain('key: "Enter"');
   });
 
-  it.each([{ key: "" }, { key: null }, {}, { key: "x" }])(
+  it.each([{ key: "" }, { key: null }, {}, { key: "x" }, { key: "Enter" }])(
     "ignores empty and unmapped input %#",
     (event) => {
       expect(resolveCommandCenterShortcut(event)).toBeNull();

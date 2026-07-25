@@ -27,6 +27,11 @@ import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
+import {
+  setAudioModeAsync,
+  useAudioPlayer,
+  useAudioPlayerStatus,
+} from "expo-audio";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { StatusBar } from "expo-status-bar";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
@@ -34,6 +39,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown, { type RenderRules } from "react-native-markdown-display";
 import { toByteArray } from "base64-js";
 import CJMUXVisionDevice from "../../../modules/cjmux-vision-device";
+import {
+  CJMUXKeyboardShortcutSurface,
+  hasNativeCJMUXKeyboardShortcuts,
+  type CJMUXKeyboardShortcutMode,
+} from "../../../modules/cjmux-keyboard-shortcuts";
 import { darkTheme, lightTheme } from "@/theme";
 import type { AppTheme } from "@/theme";
 import {
@@ -645,7 +655,10 @@ function CommandCenterScreen() {
   const systemScheme = useColorScheme();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const auth = useTmuxMobileAuth();
+  const api = useTmuxMobileApi();
   const queryClient = useQueryClient();
+  const shortcutAudioPlayer = useAudioPlayer(null, { updateInterval: 250 });
+  const shortcutAudioStatus = useAudioPlayerStatus(shortcutAudioPlayer);
   const commandCenter = useCommandCenter();
   const cardStars = useCardStars();
   const toggleCardStar = useToggleCardStar();
@@ -666,8 +679,18 @@ function CommandCenterScreen() {
   const [transcriptTarget, setTranscriptTarget] = React.useState<AgentSession | null>(null);
   const pendingFileTarget = React.useRef<AgentFileTarget | null>(null);
   const filePreviewOrigin = React.useRef<FilePreviewOrigin | null>(null);
+  const agentListRef = React.useRef<FlatList<AgentSession>>(null);
+  const shortcutReadGeneration = React.useRef(0);
+  const shortcutReadAbort = React.useRef<AbortController | null>(null);
+  const shortcutActiveRead = React.useRef<{
+    generation: number;
+    agentKey: string;
+    phase: "requesting" | "starting" | "playing";
+    initialError: string | null;
+  } | null>(null);
   const [startVisible, setStartVisible] = React.useState(false);
   const [menuVisible, setMenuVisible] = React.useState(false);
+  const [cardSearchVisible, setCardSearchVisible] = React.useState(false);
   const [pinsVisible, setPinsVisible] = React.useState(false);
   const [settingsVisible, setSettingsVisible] = React.useState(false);
   const [selectedAgent, setSelectedAgent] = React.useState<AgentSession | null>(null);
@@ -987,6 +1010,11 @@ function CommandCenterScreen() {
               : columns;
       const nextIndex = Math.max(0, Math.min(agents.length - 1, currentIndex + delta));
       setSelectedAgent(agents[nextIndex] || null);
+      agentListRef.current?.scrollToIndex({
+        index: Math.floor(nextIndex / columns),
+        animated: true,
+        viewPosition: 0.5,
+      });
       void Haptics.selectionAsync();
     },
     [activeShortcutAgent, agents, layout.listColumns],
@@ -1001,14 +1029,143 @@ function CommandCenterScreen() {
       transcriptTarget ||
       startVisible ||
       menuVisible ||
+      cardSearchVisible ||
       pinsVisible ||
       settingsVisible,
+  );
+
+  const stopShortcutRead = React.useCallback(() => {
+    shortcutReadGeneration.current += 1;
+    shortcutReadAbort.current?.abort();
+    shortcutReadAbort.current = null;
+    shortcutActiveRead.current = null;
+    shortcutAudioPlayer.pause();
+    shortcutAudioPlayer.replace({});
+  }, [shortcutAudioPlayer]);
+
+  const readShortcutAgent = React.useCallback(
+    async (agent: AgentSession) => {
+      const key = agentCardKey(agent);
+      if (shortcutActiveRead.current?.agentKey === key) {
+        stopShortcutRead();
+        return;
+      }
+      if (!api) return;
+
+      if (shortcutActiveRead.current) stopShortcutRead();
+      const generation = shortcutReadGeneration.current + 1;
+      const abortController = new AbortController();
+      shortcutReadGeneration.current = generation;
+      shortcutReadAbort.current = abortController;
+      shortcutActiveRead.current = {
+        generation,
+        agentKey: key,
+        phase: "requesting",
+        initialError: shortcutAudioStatus.error,
+      };
+
+      try {
+        const response = await api.windowAudioSummary({
+          machineId: agentMachineKey(agent),
+          mux: agent.mux || "tmux",
+          paneId: agent.paneId,
+          windowId: agent.windowId,
+          signal: abortController.signal,
+        });
+        if (
+          shortcutReadGeneration.current !== generation ||
+          shortcutActiveRead.current?.generation !== generation
+        ) {
+          return;
+        }
+        if (!response.audioBase64) {
+          throw new Error("The controller returned no audio.");
+        }
+        await setAudioModeAsync({ playsInSilentMode: true });
+        if (
+          shortcutReadGeneration.current !== generation ||
+          shortcutActiveRead.current?.generation !== generation
+        ) {
+          return;
+        }
+        const mimeType = response.mimeType || "audio/mpeg";
+        shortcutActiveRead.current.phase = "starting";
+        shortcutAudioPlayer.replace({
+          uri: `data:${mimeType};base64,${response.audioBase64}`,
+        });
+        shortcutAudioPlayer.play();
+      } catch (error) {
+        if (
+          shortcutReadGeneration.current !== generation ||
+          shortcutActiveRead.current?.generation !== generation
+        ) {
+          return;
+        }
+        shortcutReadAbort.current = null;
+        shortcutActiveRead.current = null;
+        if (error instanceof Error && error.name === "AbortError") return;
+        Alert.alert(
+          "Read aloud failed",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    },
+    [
+      api,
+      shortcutAudioPlayer,
+      shortcutAudioStatus.error,
+      stopShortcutRead,
+    ],
+  );
+
+  React.useEffect(() => {
+    const activeRead = shortcutActiveRead.current;
+    if (!activeRead || activeRead.phase === "requesting") return;
+    if (activeRead.phase === "starting") {
+      if (shortcutAudioStatus.playing) activeRead.phase = "playing";
+      else if (
+        shortcutAudioStatus.error &&
+        shortcutAudioStatus.error !== activeRead.initialError
+      ) {
+        shortcutReadAbort.current = null;
+        shortcutActiveRead.current = null;
+        Alert.alert("Read aloud failed", shortcutAudioStatus.error);
+      }
+      return;
+    }
+    if (shortcutAudioStatus.didJustFinish) {
+      shortcutReadAbort.current = null;
+      shortcutActiveRead.current = null;
+      shortcutAudioPlayer.replace({});
+      return;
+    }
+    if (shortcutAudioStatus.error) {
+      shortcutReadAbort.current = null;
+      shortcutActiveRead.current = null;
+      Alert.alert("Read aloud failed", shortcutAudioStatus.error);
+    }
+  }, [
+    shortcutAudioStatus.didJustFinish,
+    shortcutAudioStatus.error,
+    shortcutAudioStatus.playing,
+    shortcutAudioPlayer,
+  ]);
+
+  React.useEffect(
+    () => () => {
+      stopShortcutRead();
+    },
+    [api, stopShortcutRead],
   );
 
   const handleCommandCenterKeyDown = React.useCallback(
     (event: unknown) => {
       const e = event as {
         preventDefault?: () => void;
+        defaultPrevented?: boolean;
+        target?: {
+          closest?: (selector: string) => unknown;
+        };
         nativeEvent?: {
           key?: string;
           ctrlKey?: boolean;
@@ -1016,17 +1173,33 @@ function CommandCenterScreen() {
           altKey?: boolean;
           shiftKey?: boolean;
           repeat?: boolean;
+          isComposing?: boolean;
         };
       };
       const native = e.nativeEvent || {};
-      const shortcut = resolveCommandCenterShortcut(native as CommandCenterShortcutEvent);
+      const shortcut = resolveCommandCenterShortcut({
+        ...native,
+        defaultPrevented: e.defaultPrevented,
+        editableTarget: Boolean(
+          e.target?.closest?.(
+            "input, textarea, select, button, a, summary, [contenteditable='true']",
+          ),
+        ),
+      } as CommandCenterShortcutEvent);
       if (!shortcut) return;
 
       if (shortcut.type === "escape") {
-        if (menuVisible) setMenuVisible(false);
+        if (fileTarget) setFileTarget(null);
+        else if (transcriptTarget) setTranscriptTarget(null);
+        else if (responseTarget) setResponseTarget(null);
+        else if (viewTarget) setViewTarget(null);
+        else if (sendTarget) setSendTarget(null);
+        else if (renameTarget) setRenameTarget(null);
+        else if (startVisible) setStartVisible(false);
+        else if (menuVisible) setMenuVisible(false);
+        else if (cardSearchVisible) setCardSearchVisible(false);
         else if (pinsVisible) setPinsVisible(false);
         else if (settingsVisible) setSettingsVisible(false);
-        else if (startVisible) setStartVisible(false);
         else return;
         e.preventDefault?.();
         return;
@@ -1040,6 +1213,25 @@ function CommandCenterScreen() {
         return;
       }
 
+      if (shortcut.type === "refresh") {
+        e.preventDefault?.();
+        refreshCommandCenter();
+        return;
+      }
+
+      if (shortcut.type === "search") {
+        e.preventDefault?.();
+        setCardSearchVisible(true);
+        return;
+      }
+
+      if (shortcut.type === "stop-reading") {
+        if (!shortcutActiveRead.current) return;
+        e.preventDefault?.();
+        stopShortcutRead();
+        return;
+      }
+
       const agent = activeShortcutAgent;
       if (!agent) return;
       if (shortcut.type === "view") {
@@ -1050,6 +1242,10 @@ function CommandCenterScreen() {
         e.preventDefault?.();
         setSelectedAgent(agent);
         setSendTarget(agent);
+      } else if (shortcut.type === "read") {
+        e.preventDefault?.();
+        setSelectedAgent(agent);
+        void readShortcutAgent(agent);
       } else if (shortcut.type === "response") {
         e.preventDefault?.();
         if (agent.lastAssistantText) {
@@ -1060,22 +1256,36 @@ function CommandCenterScreen() {
         e.preventDefault?.();
         setSelectedAgent(agent);
         setTranscriptTarget(agent);
-      } else if (shortcut.type === "refresh") {
-        e.preventDefault?.();
-        refreshCommandCenter();
       }
     },
     [
       activeShortcutAgent,
+      cardSearchVisible,
+      fileTarget,
       menuVisible,
       modalOpen,
       moveSelectedAgent,
       pinsVisible,
+      readShortcutAgent,
+      renameTarget,
       refreshCommandCenter,
+      responseTarget,
+      sendTarget,
       settingsVisible,
       startVisible,
+      stopShortcutRead,
+      transcriptTarget,
+      viewTarget,
     ],
   );
+
+  const ipadShortcutEnabled =
+    Platform.OS === "ios" && Platform.isPad && !visionControlsEnabled;
+  const ipadShortcutMode: CJMUXKeyboardShortcutMode = !ipadShortcutEnabled
+    ? "none"
+    : modalOpen
+      ? "escape"
+      : "all";
 
   const commandCenterKeyboardProps = React.useMemo(
     () => {
@@ -1096,7 +1306,6 @@ function CommandCenterScreen() {
     },
     [handleCommandCenterKeyDown],
   );
-
   React.useEffect(() => {
     return () => {
       if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
@@ -1150,10 +1359,19 @@ function CommandCenterScreen() {
   }
 
   return withTheme(
-    <View {...commandCenterKeyboardProps} style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+    <CJMUXKeyboardShortcutSurface
+      {...commandCenterKeyboardProps}
+      mode={ipadShortcutMode}
+      onShortcutKeyDown={handleCommandCenterKeyDown}
+      style={[styles.screen, { paddingTop: insets.top + 8 }]}
+    >
       <StatusBar style={theme.dark ? "light" : "dark"} />
       <LegacyIPadShortcutCapture
-        enabled={Platform.OS === "ios" && Platform.isPad && !visionControlsEnabled && !modalOpen}
+        enabled={
+          ipadShortcutEnabled &&
+          !hasNativeCJMUXKeyboardShortcuts &&
+          !modalOpen
+        }
         onKeyDown={handleCommandCenterKeyDown}
       />
       <View style={styles.header}>
@@ -1218,9 +1436,16 @@ function CommandCenterScreen() {
       ) : null}
 
       <FlatList
+        ref={agentListRef}
         key={`agent-grid-${layout.listColumns}`}
         data={agents}
         keyExtractor={agentCardKey}
+        onScrollToIndexFailed={({ index, averageItemLength }) => {
+          agentListRef.current?.scrollToOffset({
+            offset: Math.max(0, index * averageItemLength),
+            animated: true,
+          });
+        }}
         extraData={
           useCompactSessionCards ? expandedAgentKey : "all-cards-expanded"
         }
@@ -1331,6 +1556,26 @@ function CommandCenterScreen() {
         onClose={() => setTranscriptTarget(null)}
         onDismiss={presentPendingFile}
       />
+      <CardSearchModal
+        visible={cardSearchVisible}
+        agents={agents}
+        selectedAgent={selectedAgent}
+        onSelect={(agent) => {
+          const nextIndex = agents.findIndex(
+            (candidate) => agentCardKey(candidate) === agentCardKey(agent),
+          );
+          setSelectedAgent(agent);
+          setCardSearchVisible(false);
+          if (nextIndex >= 0) {
+            agentListRef.current?.scrollToIndex({
+              index: Math.floor(nextIndex / Math.max(1, layout.listColumns)),
+              animated: true,
+              viewPosition: 0.5,
+            });
+          }
+        }}
+        onClose={() => setCardSearchVisible(false)}
+      />
       <PinnedArtifactsModal visible={pinsVisible} onClose={() => setPinsVisible(false)} />
       <SettingsModal
         visible={settingsVisible}
@@ -1358,7 +1603,7 @@ function CommandCenterScreen() {
         selectedAgent={selectedAgent}
         onClose={() => setStartVisible(false)}
       />
-    </View>,
+    </CJMUXKeyboardShortcutSurface>,
   );
 }
 
@@ -1429,7 +1674,7 @@ function LoginScreen() {
           disabled={auth.signingIn}
           onPress={() => {
             auth.setBaseUrl(url);
-            void auth.signIn();
+            void auth.signIn(url);
           }}
         >
           {auth.signingIn ? (
@@ -2179,6 +2424,152 @@ function IconButton({
     <Pressable accessibilityLabel={label} style={styles.iconButton} onPress={onPress}>
       {icon}
     </Pressable>
+  );
+}
+
+function CardSearchModal({
+  visible,
+  agents,
+  selectedAgent,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean;
+  agents: AgentSession[];
+  selectedAgent: AgentSession | null;
+  onSelect: (agent: AgentSession) => void;
+  onClose: () => void;
+}) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  const visionControls = useVisionControls();
+  const [query, setQuery] = React.useState("");
+  const [selectedIndex, setSelectedIndex] = React.useState(0);
+  const selectedKey = selectedAgent ? agentCardKey(selectedAgent) : "";
+  const results = React.useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return agents;
+    return agents.filter((agent) =>
+      [
+        agentTitle(agent),
+        agent.machineHostname,
+        agent.sessionName,
+        agent.windowName,
+        agent.cwd,
+        agent.kind,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(needle),
+    );
+  }, [agents, query]);
+
+  React.useEffect(() => {
+    if (!visible) return;
+    setQuery("");
+    const index = agents.findIndex(
+      (agent) => agentCardKey(agent) === selectedKey,
+    );
+    setSelectedIndex(index >= 0 ? index : 0);
+  }, [agents, selectedKey, visible]);
+
+  React.useEffect(() => {
+    setSelectedIndex((current) =>
+      Math.max(0, Math.min(results.length - 1, current)),
+    );
+  }, [results.length]);
+
+  const submit = React.useCallback(() => {
+    const agent = results[selectedIndex];
+    if (agent) onSelect(agent);
+  }, [onSelect, results, selectedIndex]);
+
+  if (visionControls) return null;
+
+  return (
+    <SheetModal
+      visible={visible}
+      title="Find session"
+      tall
+      wide
+      onClose={onClose}
+    >
+      <KeyboardTextInput
+        autoFocus={visible}
+        value={query}
+        onChangeText={(value) => {
+          setQuery(value);
+          setSelectedIndex(0);
+        }}
+        onKeyPress={(event) => {
+          const key = event.nativeEvent.key;
+          if (key === "ArrowDown") {
+            event.preventDefault();
+            setSelectedIndex((current) =>
+              Math.min(results.length - 1, current + 1),
+            );
+          } else if (key === "ArrowUp") {
+            event.preventDefault();
+            setSelectedIndex((current) => Math.max(0, current - 1));
+          } else if (key === "Enter") {
+            event.preventDefault();
+            submit();
+          } else if (key === "Escape") {
+            event.preventDefault();
+            onClose();
+          }
+        }}
+        autoCapitalize="none"
+        autoCorrect={false}
+        clearButtonMode="while-editing"
+        returnKeyType="done"
+        onSubmitEditing={submit}
+        placeholder="Name, machine, session, or directory"
+        placeholderTextColor={theme.colors.textMuted}
+        style={styles.textInput}
+      />
+      <Text style={styles.cardSearchHint}>
+        ↑↓ choose · Return select · Esc close
+      </Text>
+      <FlatList
+        data={results}
+        keyExtractor={agentCardKey}
+        keyboardShouldPersistTaps="handled"
+        style={styles.cardSearchList}
+        contentContainerStyle={styles.cardSearchListContent}
+        ListEmptyComponent={
+          <Text style={styles.cardSearchEmpty}>No matching sessions</Text>
+        }
+        renderItem={({ item, index }) => {
+          const active = index === selectedIndex;
+          return (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              style={[
+                styles.cardSearchResult,
+                active ? styles.cardSearchResultActive : null,
+              ]}
+              onPress={() => onSelect(item)}
+            >
+              <Text style={styles.cardSearchResultTitle} numberOfLines={1}>
+                {agentTitle(item)}
+              </Text>
+              <Text style={styles.cardSearchResultMeta} numberOfLines={1}>
+                {[
+                  item.machineHostname || agentMachineKey(item),
+                  item.sessionName,
+                  item.cwd,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </Text>
+            </Pressable>
+          );
+        }}
+      />
+    </SheetModal>
   );
 }
 
@@ -6067,7 +6458,13 @@ function SheetModal({
       onDismiss={onDismiss}
       onRequestClose={closeSheet}
     >
-      <View style={styles.modalRoot}>
+      <CJMUXKeyboardShortcutSurface
+        mode={Platform.OS === "ios" && Platform.isPad ? "escape" : "none"}
+        onShortcutKeyDown={({ nativeEvent }) => {
+          if (nativeEvent.key === "Escape") closeSheet();
+        }}
+        style={styles.modalRoot}
+      >
         <View style={styles.modalBackdrop}>
           <Pressable accessibilityLabel="Dismiss sheet" style={styles.modalBackdropTouch} onPress={closeSheet} />
           <View
@@ -6105,7 +6502,7 @@ function SheetModal({
             </Animated.View>
           </View>
         </View>
-      </View>
+      </CJMUXKeyboardShortcutSurface>
     </Modal>
   );
 }
@@ -6944,6 +7341,50 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     height: 1,
     marginVertical: 4,
     backgroundColor: theme.colors.border,
+  },
+  cardSearchHint: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  cardSearchList: {
+    flex: 1,
+    minHeight: 0,
+    width: "100%",
+  },
+  cardSearchListContent: {
+    gap: 8,
+    paddingBottom: 12,
+  },
+  cardSearchResult: {
+    minHeight: 58,
+    width: "100%",
+    minWidth: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    justifyContent: "center",
+    gap: 3,
+  },
+  cardSearchResultActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
+  cardSearchResultTitle: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  cardSearchResultMeta: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  cardSearchEmpty: {
+    ...theme.typography.body,
+    color: theme.colors.textMuted,
+    textAlign: "center",
+    paddingVertical: 28,
   },
   settingsSection: {
     width: "100%",
