@@ -1,4 +1,6 @@
 PODS:
+  - CJMUXVisionDevice (1.0.0):
+    - ExpoModulesCore
   - EASClient (57.0.0):
     - ExpoModulesCore
   - EXApplication (57.0.0):
@@ -2563,6 +2565,7 @@ PODS:
   - Yoga (0.0.0)
 
 DEPENDENCIES:
+  - CJMUXVisionDevice (from `../modules/cjmux-vision-device/ios`)
   - EASClient (from `../node_modules/expo-eas-client/ios`)
   - EXApplication (from `../node_modules/expo-application/ios`)
   - EXConstants (from `../node_modules/expo-constants/ios`)
@@ -2692,6 +2695,8 @@ SPEC REPOS:
     - ReachabilitySwift
 
 EXTERNAL SOURCES:
+  CJMUXVisionDevice:
+    :path: "../modules/cjmux-vision-device/ios"
   EASClient:
     :path: "../node_modules/expo-eas-client/ios"
   EXApplication:
@@ -2939,6 +2944,7 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
+  CJMUXVisionDevice: b2b0914bacd4538937e0e7031fcbeed675a45d44
   EASClient: 7d3aa729ae2cd433b5bc314a6d3543fad381fa1c
   EXApplication: 7283a281903a90230466ab545ab87a8c48cf4e12
   EXConstants: d069b4a2dd469d5a3a4d3d7b09757e708fda8f64

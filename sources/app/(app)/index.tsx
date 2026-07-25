@@ -33,6 +33,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown, { type RenderRules } from "react-native-markdown-display";
 import { toByteArray } from "base64-js";
+import CJMUXVisionDevice from "../../../modules/cjmux-vision-device";
 import { darkTheme, lightTheme } from "@/theme";
 import type { AppTheme } from "@/theme";
 import {
@@ -68,6 +69,7 @@ import {
   Send,
   Star,
   Settings2,
+  Smartphone,
   Sun,
   Terminal,
   Trash2,
@@ -117,6 +119,16 @@ import {
   splitFilePathText,
 } from "@/tmux-mobile/file-links";
 import { useOtaUpdates, type OtaUpdateController, type OtaUpdateNotice } from "@/tmux-mobile/updates";
+import {
+  normalizeSpokenControllerUrl,
+  resolveFieldPresentation,
+  resolvePaneComposerPresentation,
+  resolveVisionControls,
+  requiresVisionModeChoice,
+  VISION_CONTROLS_PREFERENCE_KEY,
+  type VisionControlsPreference,
+  type VisionFieldId,
+} from "@/tmux-mobile/vision-controls";
 import type {
   AgentFileResponse,
   AgentSession,
@@ -146,6 +158,13 @@ const CONTROLLER_BROWSER_HANDOFF_PATHS = new Set([
   "/api/file-page",
   "/api/file-raw",
 ]);
+const NATIVE_VISION_CONTROLS_STATUS: boolean | null =
+  Platform.OS !== "ios"
+    ? false
+    : Platform.isVision
+      ? true
+      : CJMUXVisionDevice.isIOSAppOnVision;
+const NATIVE_VISION_CONTROLS_DETECTED = NATIVE_VISION_CONTROLS_STATUS === true;
 type ThemeMode = "light" | "dark";
 type MachineChipStats = {
   workingCount: number;
@@ -189,6 +208,7 @@ type AppStyles = ReturnType<typeof createStyles>;
 
 const ThemeContext = React.createContext<AppTheme>(lightTheme);
 const StylesContext = React.createContext<AppStyles>(createStyles(lightTheme));
+const VisionControlsContext = React.createContext(false);
 
 const PROMPT_SHORTCUTS = [
   { label: "Yes", text: "yes" },
@@ -247,6 +267,14 @@ const TERMINAL_KEYBOARD_KEYS: readonly TerminalKeyEntry[] = [
   { label: "^Z", key: "C-z", danger: true },
   { label: "q", key: "q" },
   { label: "fg", command: "fg" },
+] as const;
+const VISION_QUICK_KEYS: readonly TerminalKeyEntry[] = [
+  { label: "Enter", key: "Enter" },
+  { label: "Esc", key: "Escape" },
+  { label: "Tab", key: "Tab" },
+  { label: "↑", key: "Up" },
+  { label: "↓", key: "Down" },
+  { label: "^C", key: "C-c", danger: true },
 ] as const;
 const TERMINAL_INITIAL_LINES = 260;
 const TERMINAL_REFRESH_LINES = 320;
@@ -320,6 +348,14 @@ function useAppTheme() {
 
 function useAppStyles() {
   return React.useContext(StylesContext);
+}
+
+function useVisionControls() {
+  return React.useContext(VisionControlsContext);
+}
+
+function useFieldPresentation(field: VisionFieldId) {
+  return resolveFieldPresentation(field, useVisionControls());
 }
 
 function activityTime(agent: AgentSession): number {
@@ -611,6 +647,10 @@ function CommandCenterScreen() {
   const [themeMode, setThemeMode] = React.useState<ThemeMode>(
     systemScheme === "dark" ? "dark" : "light",
   );
+  const [visionControlsPreference, setVisionControlsPreference] =
+    React.useState<VisionControlsPreference>("auto");
+  const [visionControlsPreferenceLoaded, setVisionControlsPreferenceLoaded] = React.useState(false);
+  const [visionModeChoiceRequired, setVisionModeChoiceRequired] = React.useState(false);
   const [machineFilter, setMachineFilter] = React.useState("all");
   const [sendTarget, setSendTarget] = React.useState<AgentSession | null>(null);
   const [renameTarget, setRenameTarget] = React.useState<AgentSession | null>(null);
@@ -637,6 +677,10 @@ function CommandCenterScreen() {
   );
   const styles = React.useMemo(() => createStyles(theme, layout), [layout, theme]);
   const otaUpdates = useOtaUpdates();
+  const visionControlsEnabled = resolveVisionControls(
+    visionControlsPreference,
+    NATIVE_VISION_CONTROLS_DETECTED,
+  );
 
   React.useEffect(() => {
     let mounted = true;
@@ -649,6 +693,43 @@ function CommandCenterScreen() {
       mounted = false;
     };
   }, []);
+
+  React.useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      let storedPreference: VisionControlsPreference | null = null;
+      try {
+        const value = await AsyncStorage.getItem(VISION_CONTROLS_PREFERENCE_KEY);
+        if (value === "auto" || value === "on") storedPreference = value;
+      } catch {
+        // Treat an unreadable preference as no choice so older binaries fail closed.
+      }
+      if (!mounted) return;
+      if (storedPreference) setVisionControlsPreference(storedPreference);
+      setVisionModeChoiceRequired(
+        requiresVisionModeChoice(NATIVE_VISION_CONTROLS_STATUS, storedPreference),
+      );
+      setVisionControlsPreferenceLoaded(true);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (visionControlsEnabled) Keyboard.dismiss();
+  }, [visionControlsEnabled]);
+
+  const updateVisionControlsPreference = React.useCallback(
+    (next: VisionControlsPreference) => {
+      setVisionControlsPreference(next);
+      setVisionModeChoiceRequired(false);
+      AsyncStorage.setItem(VISION_CONTROLS_PREFERENCE_KEY, next).catch(() => {});
+      Keyboard.dismiss();
+      void Haptics.selectionAsync();
+    },
+    [],
+  );
 
   const machines = commandCenter.data?.machines || EMPTY_MACHINES;
   const rawAgents = commandCenter.data?.agents || EMPTY_AGENTS;
@@ -1019,17 +1100,30 @@ function CommandCenterScreen() {
   const withTheme = React.useCallback(
     (node: React.ReactNode) => (
       <ThemeContext.Provider value={theme}>
-        <StylesContext.Provider value={styles}>{node}</StylesContext.Provider>
+        <StylesContext.Provider value={styles}>
+          <VisionControlsContext.Provider value={visionControlsEnabled}>
+            {node}
+          </VisionControlsContext.Provider>
+        </StylesContext.Provider>
       </ThemeContext.Provider>
     ),
-    [styles, theme],
+    [styles, theme, visionControlsEnabled],
   );
 
-  if (auth.loading) {
+  if (auth.loading || !visionControlsPreferenceLoaded) {
     return withTheme(
       <View style={[styles.center, { backgroundColor: theme.colors.background }]}>
         <ActivityIndicator color={theme.colors.accent} />
       </View>,
+    );
+  }
+
+  if (visionModeChoiceRequired) {
+    return withTheme(
+      <VisionModeGate
+        onChooseVision={() => updateVisionControlsPreference("on")}
+        onChooseStandard={() => updateVisionControlsPreference("auto")}
+      />,
     );
   }
 
@@ -1206,7 +1300,14 @@ function CommandCenterScreen() {
         onDismiss={presentPendingFile}
       />
       <PinnedArtifactsModal visible={pinsVisible} onClose={() => setPinsVisible(false)} />
-      <SettingsModal visible={settingsVisible} ota={otaUpdates} onClose={() => setSettingsVisible(false)} />
+      <SettingsModal
+        visible={settingsVisible}
+        ota={otaUpdates}
+        visionControlsPreference={visionControlsPreference}
+        visionDetected={NATIVE_VISION_CONTROLS_DETECTED}
+        onVisionControlsPreferenceChange={updateVisionControlsPreference}
+        onClose={() => setSettingsVisible(false)}
+      />
       <CommandMenu
         visible={menuVisible}
         topOffset={insets.top + 54}
@@ -1233,8 +1334,17 @@ function LoginScreen() {
   const theme = useAppTheme();
   const styles = useAppStyles();
   const insets = useSafeAreaInsets();
+  const visionControls = useVisionControls();
+  const controllerPresentation = useFieldPresentation("controller-url");
   const auth = useTmuxMobileAuth();
   const [url, setUrl] = React.useState(auth.baseUrl);
+  const [voiceStatus, setVoiceStatus] = React.useState("");
+  const controllerVoice = useLocalVoiceInput({
+    scopeKey: "login:controller-url",
+    onText: (transcript) => setUrl(normalizeSpokenControllerUrl(transcript)),
+    onStatus: setVoiceStatus,
+    contextualStrings: ["https", "eng.impo.ai", "production", "localhost"],
+  });
 
   return (
     <KeyboardAvoidingView
@@ -1248,22 +1358,42 @@ function LoginScreen() {
         <Text style={styles.loginText}>
           Native command center for Codex and Claude sessions running through tmux-mobile.
         </Text>
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Controller</Text>
-          <TextInput
+        {controllerPresentation === "voice" ? (
+          <VoiceValueField
+            label="Controller"
             value={url}
-            onChangeText={setUrl}
-            onBlur={() => auth.setBaseUrl(url)}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            style={styles.textInput}
-            placeholder="https://eng.impo.ai"
-            placeholderTextColor={theme.colors.textMuted}
+            emptyLabel="Say “production” for eng.impo.ai"
+            active={controllerVoice.active}
+            status={voiceStatus}
+            onToggle={() => {
+              controllerVoice.toggle().catch((error) => {
+                setVoiceStatus(error instanceof Error ? error.message : String(error));
+              });
+            }}
+            onClear={() => setUrl("")}
           />
-        </View>
+        ) : (
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>Controller</Text>
+            <KeyboardTextInput
+              value={url}
+              onChangeText={setUrl}
+              onBlur={() => auth.setBaseUrl(url)}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              style={styles.textInput}
+              placeholder="https://eng.impo.ai"
+              placeholderTextColor={theme.colors.textMuted}
+            />
+          </View>
+        )}
         <Pressable
-          style={[styles.primaryButton, styles.loginButton]}
+          style={[
+            styles.primaryButton,
+            styles.loginButton,
+            visionControls ? styles.visionSubmitButton : null,
+          ]}
           disabled={auth.signingIn}
           onPress={() => {
             auth.setBaseUrl(url);
@@ -1285,6 +1415,62 @@ function LoginScreen() {
         {auth.error ? <Text style={styles.errorText}>{auth.error}</Text> : null}
       </View>
     </KeyboardAvoidingView>
+  );
+}
+
+function VisionModeGate({
+  onChooseVision,
+  onChooseStandard,
+}: {
+  onChooseVision: () => void;
+  onChooseStandard: () => void;
+}) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View
+      style={[
+        styles.loginScreen,
+        {
+          paddingTop: insets.top + 24,
+          paddingBottom: insets.bottom + 24,
+        },
+      ]}
+    >
+      <View style={styles.loginPanel}>
+        <Image source={APP_LOGO} style={styles.loginLogo} resizeMode="contain" />
+        <Text style={styles.loginTitle}>Choose controls</Text>
+        <Text style={styles.loginText}>
+          Are you using Apple Vision Pro? Choose before CJMUX shows any text field.
+        </Text>
+        <View style={styles.visionModeActions}>
+          <Pressable
+            accessibilityLabel="Use Vision Pro voice-only controls"
+            style={[styles.visionModeChoiceButton, styles.visionModeChoiceButtonPrimary]}
+            onPress={onChooseVision}
+          >
+            <Mic size={26} color={theme.colors.surfaceRaised} />
+            <View style={styles.visionModeChoiceTextBlock}>
+              <Text style={styles.visionModeChoicePrimaryText}>Vision Pro</Text>
+              <Text style={styles.visionModeChoicePrimaryMeta}>Voice only · no keyboard</Text>
+            </View>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Use standard iPhone or iPad controls"
+            style={styles.visionModeChoiceButton}
+            onPress={onChooseStandard}
+          >
+            <Smartphone size={26} color={theme.colors.text} />
+            <View style={styles.visionModeChoiceTextBlock}>
+              <Text style={styles.visionModeChoiceText}>iPhone or iPad</Text>
+              <Text style={styles.visionModeChoiceMeta}>Standard text controls</Text>
+            </View>
+          </Pressable>
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -2034,10 +2220,16 @@ function UpdateNoticeBanner({
 function SettingsModal({
   visible,
   ota,
+  visionControlsPreference,
+  visionDetected,
+  onVisionControlsPreferenceChange,
   onClose,
 }: {
   visible: boolean;
   ota: OtaUpdateController;
+  visionControlsPreference: VisionControlsPreference;
+  visionDetected: boolean;
+  onVisionControlsPreferenceChange: (value: VisionControlsPreference) => void;
   onClose: () => void;
 }) {
   const theme = useAppTheme();
@@ -2089,6 +2281,49 @@ function SettingsModal({
             )}
             <Text style={styles.primaryButtonText}>Apply</Text>
           </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.settingsSection}>
+        <View style={styles.settingsSectionHeader}>
+          <Eye size={16} color={theme.colors.textMuted} />
+          <Text style={styles.settingsSectionTitle}>Vision controls</Text>
+        </View>
+        <Text style={styles.settingsSectionDescription}>
+          {visionDetected
+            ? "Apple Vision Pro detected. Text fields are replaced with voice controls."
+            : "Auto uses Apple’s Vision runtime signal. Use On as a fallback on older visionOS versions or to preview this layout."}
+        </Text>
+        <View style={styles.visionPreferenceRow}>
+          {(
+            [
+              ["auto", "Auto"],
+              ["on", "On"],
+            ] as const
+          ).map(([value, label]) => {
+            const active = visionControlsPreference === value;
+            return (
+              <Pressable
+                key={value}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: active }}
+                style={[
+                  styles.visionPreferenceButton,
+                  active ? styles.visionPreferenceButtonActive : null,
+                ]}
+                onPress={() => onVisionControlsPreferenceChange(value)}
+              >
+                <Text
+                  style={[
+                    styles.visionPreferenceButtonText,
+                    active ? styles.visionPreferenceButtonTextActive : null,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
       </View>
 
@@ -2224,6 +2459,7 @@ function useServerVoiceInput({
   const audioUriRef = React.useRef("");
   const lastTranscribedUriRef = React.useRef("");
   const scopeKeyRef = React.useRef(scopeKey);
+  const requestGenerationRef = React.useRef(0);
 
   const setMode = React.useCallback((next: ServerVoiceMode) => {
     modeRef.current = next;
@@ -2231,18 +2467,22 @@ function useServerVoiceInput({
   }, []);
 
   React.useEffect(() => {
-    if (scopeKeyRef.current && scopeKeyRef.current !== scopeKey && activeRef.current) {
-      activeRef.current = false;
-      audioUriRef.current = "";
-      lastTranscribedUriRef.current = "";
-      setMode("idle");
-      safelyAbortVoiceRecognition();
+    if (scopeKeyRef.current !== scopeKey) {
+      requestGenerationRef.current += 1;
+      if (activeRef.current) {
+        activeRef.current = false;
+        audioUriRef.current = "";
+        lastTranscribedUriRef.current = "";
+        setMode("idle");
+        safelyAbortVoiceRecognition();
+      }
     }
     scopeKeyRef.current = scopeKey;
   }, [scopeKey, setMode]);
 
   React.useEffect(() => {
     return () => {
+      requestGenerationRef.current += 1;
       if (!activeRef.current) return;
       activeRef.current = false;
       safelyAbortVoiceRecognition();
@@ -2251,6 +2491,8 @@ function useServerVoiceInput({
 
   const finishRecording = React.useCallback(async (uri: string | null | undefined) => {
     if (!activeRef.current) return;
+    const requestGeneration = requestGenerationRef.current;
+    const requestScope = scopeKeyRef.current;
     const audioUri = uri || audioUriRef.current;
     audioUriRef.current = audioUri || "";
     setMode("transcribing");
@@ -2280,6 +2522,12 @@ function useServerVoiceInput({
         uri: audioUri,
         type: voiceAudioContentType(audioUri),
       });
+      if (
+        requestGeneration !== requestGenerationRef.current ||
+        requestScope !== scopeKeyRef.current
+      ) {
+        return;
+      }
       const transcript = String(result.text || "").trim();
       if (!transcript) {
         onStatus("No speech detected");
@@ -2289,12 +2537,23 @@ function useServerVoiceInput({
       onStatus("Voice added");
       void Haptics.selectionAsync();
     } catch (error) {
+      if (
+        requestGeneration !== requestGenerationRef.current ||
+        requestScope !== scopeKeyRef.current
+      ) {
+        return;
+      }
       onStatus(error instanceof Error ? `Voice failed: ${error.message}` : `Voice failed: ${String(error)}`);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
-      activeRef.current = false;
-      audioUriRef.current = "";
-      setMode("idle");
+      if (
+        requestGeneration === requestGenerationRef.current &&
+        requestScope === scopeKeyRef.current
+      ) {
+        activeRef.current = false;
+        audioUriRef.current = "";
+        setMode("idle");
+      }
     }
   }, [api, machineId, onStatus, onText, setMode]);
 
@@ -2338,6 +2597,7 @@ function useServerVoiceInput({
       return;
     }
     if (modeRef.current === "transcribing") return;
+    const requestGeneration = ++requestGenerationRef.current;
     onStatus("");
     if (!api) {
       onStatus("Voice input is not connected");
@@ -2356,6 +2616,12 @@ function useServerVoiceInput({
       return;
     }
     const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (
+      requestGeneration !== requestGenerationRef.current ||
+      scopeKeyRef.current !== scopeKey
+    ) {
+      return;
+    }
     if (!permission.granted) {
       onStatus("Voice permission denied");
       return;
@@ -2395,6 +2661,210 @@ function useServerVoiceInput({
   };
 }
 
+function useLocalVoiceInput({
+  scopeKey,
+  onText,
+  onStatus,
+  contextualStrings,
+}: {
+  scopeKey: string;
+  onText: (value: string) => void;
+  onStatus: (value: string) => void;
+  contextualStrings: readonly string[];
+}) {
+  const [active, setActiveState] = React.useState(false);
+  const activeRef = React.useRef(false);
+  const receivedResultRef = React.useRef(false);
+  const scopeKeyRef = React.useRef(scopeKey);
+  const requestGenerationRef = React.useRef(0);
+
+  const setActive = React.useCallback((next: boolean) => {
+    activeRef.current = next;
+    setActiveState(next);
+  }, []);
+
+  React.useEffect(() => {
+    if (scopeKeyRef.current !== scopeKey) {
+      requestGenerationRef.current += 1;
+      if (activeRef.current) {
+        setActive(false);
+        safelyAbortVoiceRecognition();
+      }
+    }
+    scopeKeyRef.current = scopeKey;
+  }, [scopeKey, setActive]);
+
+  React.useEffect(() => {
+    return () => {
+      requestGenerationRef.current += 1;
+      if (!activeRef.current) return;
+      activeRef.current = false;
+      safelyAbortVoiceRecognition();
+    };
+  }, []);
+
+  useSpeechRecognitionEvent("start", () => {
+    if (!activeRef.current) return;
+    onStatus("Listening...");
+  });
+
+  useSpeechRecognitionEvent("result", (event) => {
+    if (!activeRef.current || !event.isFinal) return;
+    const transcript = String(event.results[0]?.transcript || "").trim();
+    receivedResultRef.current = Boolean(transcript);
+    setActive(false);
+    if (!transcript) {
+      onStatus("No speech detected");
+      return;
+    }
+    onText(transcript);
+    onStatus("Voice added");
+    void Haptics.selectionAsync();
+  });
+
+  useSpeechRecognitionEvent("end", () => {
+    if (!activeRef.current) return;
+    setActive(false);
+    if (!receivedResultRef.current) onStatus("No speech detected");
+  });
+
+  useSpeechRecognitionEvent("error", (event) => {
+    if (!activeRef.current) return;
+    setActive(false);
+    onStatus(event.message || `Voice input failed: ${event.error}`);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+  });
+
+  const toggle = React.useCallback(async () => {
+    if (activeRef.current) {
+      safelyStopVoiceRecognition();
+      onStatus("Finishing...");
+      return;
+    }
+    const requestGeneration = ++requestGenerationRef.current;
+    onStatus("");
+    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+      onStatus("Voice input is not available on this device");
+      return;
+    }
+    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (
+      requestGeneration !== requestGenerationRef.current ||
+      scopeKeyRef.current !== scopeKey
+    ) {
+      return;
+    }
+    if (!permission.granted) {
+      onStatus("Voice permission denied");
+      return;
+    }
+    receivedResultRef.current = false;
+    setActive(true);
+    try {
+      ExpoSpeechRecognitionModule.start({
+        lang: "zh-CN",
+        interimResults: false,
+        maxAlternatives: 1,
+        continuous: false,
+        addsPunctuation: true,
+        contextualStrings: [...contextualStrings],
+      });
+    } catch (error) {
+      setActive(false);
+      onStatus(error instanceof Error ? `Voice failed: ${error.message}` : `Voice failed: ${String(error)}`);
+    }
+  }, [contextualStrings, onStatus, scopeKey, setActive]);
+
+  return { active, toggle };
+}
+
+function KeyboardTextInput(props: TextInputProps) {
+  if (useVisionControls()) return null;
+  return <TextInput {...props} />;
+}
+
+function VoiceValueField({
+  label,
+  value,
+  emptyLabel,
+  active,
+  status,
+  disabled,
+  onToggle,
+  onClear,
+}: {
+  label: string;
+  value: string;
+  emptyLabel: string;
+  active: boolean;
+  status?: string;
+  disabled?: boolean;
+  onToggle: () => void;
+  onClear?: () => void;
+}) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  const clearDisabled = disabled || !value;
+
+  return (
+    <View style={styles.visionVoiceField}>
+      <Text style={styles.inputLabel}>{label}</Text>
+      <View style={styles.visionVoiceValue}>
+        <Text
+          selectable
+          style={[styles.visionVoiceValueText, !value ? styles.visionVoiceValuePlaceholder : null]}
+        >
+          {value || emptyLabel}
+        </Text>
+      </View>
+      <View style={styles.visionVoiceActionRow}>
+        <Pressable
+          accessibilityLabel={active ? `Stop ${label} voice input` : `Speak ${label}`}
+          style={[
+            styles.visionVoiceButton,
+            active ? styles.visionVoiceButtonActive : null,
+            disabled ? styles.disabledButton : null,
+          ]}
+          disabled={disabled}
+          onPress={onToggle}
+        >
+          {active ? (
+            <MicOff size={24} color={theme.colors.accent} />
+          ) : (
+            <Mic size={24} color={theme.colors.text} />
+          )}
+          <Text
+            style={[
+              styles.visionVoiceButtonText,
+              active ? styles.visionVoiceButtonTextActive : null,
+            ]}
+          >
+            {active ? "Stop" : value ? "Replace by voice" : "Speak"}
+          </Text>
+        </Pressable>
+        {onClear ? (
+          <Pressable
+            accessibilityLabel={`Clear ${label}`}
+            style={[
+              styles.visionVoiceClearButton,
+              clearDisabled ? styles.disabledButton : null,
+            ]}
+            disabled={clearDisabled}
+            onPress={onClear}
+          >
+            <X size={22} color={clearDisabled ? theme.colors.textMuted : theme.colors.text} />
+          </Pressable>
+        ) : null}
+      </View>
+      {status ? (
+        <Text style={styles.paneComposerStatus} numberOfLines={2}>
+          {status}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function TerminalKeyboardSheet({
   visible,
   disabled,
@@ -2409,10 +2879,11 @@ function TerminalKeyboardSheet({
   onShortcut?: (text: string) => void;
 }) {
   const styles = useAppStyles();
+  const visionControls = useVisionControls();
 
   return (
     <SheetModal visible={visible} title="Terminal keys" onClose={onClose}>
-      {onShortcut ? (
+      {onShortcut && !visionControls ? (
         <View style={styles.shortcutRow}>
           {PROMPT_SHORTCUTS.map((shortcut) => (
             <Pressable
@@ -2433,14 +2904,25 @@ function TerminalKeyboardSheet({
         {TERMINAL_KEYBOARD_KEYS.map((entry) => (
           <Pressable
             key={entry.label}
-            style={[styles.keyButton, entry.danger ? styles.keyButtonDanger : null]}
+            accessibilityLabel={`Send ${entry.label} terminal key`}
+            style={[
+              styles.keyButton,
+              visionControls ? styles.visionKeyButton : null,
+              entry.danger ? styles.keyButtonDanger : null,
+            ]}
             disabled={disabled}
             onPress={() => {
               onKey(entry);
               onClose();
             }}
           >
-            <Text style={[styles.keyButtonText, entry.danger ? styles.keyButtonTextDanger : null]}>
+            <Text
+              style={[
+                styles.keyButtonText,
+                visionControls ? styles.visionKeyButtonText : null,
+                entry.danger ? styles.keyButtonTextDanger : null,
+              ]}
+            >
               {entry.label}
             </Text>
           </Pressable>
@@ -2457,6 +2939,7 @@ function PaneComposer({
   onSend,
   onToggleVoice,
   onOpenKeys,
+  onQuickKey,
   onOpenUpload,
   onShortcut,
   onClear,
@@ -2488,6 +2971,7 @@ function PaneComposer({
   onSend: () => void;
   onToggleVoice: () => void;
   onOpenKeys: () => void;
+  onQuickKey?: (entry: TerminalKeyEntry) => void;
   onOpenUpload?: () => void;
   onShortcut?: (value: string) => void;
   onClear?: () => void;
@@ -2515,14 +2999,23 @@ function PaneComposer({
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const visionControls = useVisionControls();
   const expanded = variant === "expanded";
   const busy = sendBusy || keyBusy || uploadBusy;
   const controlDisabled = disabled || busy;
   const sendIsDisabled = disabled || sendDisabled || sendBusy || keyBusy;
+  const visionSendIsDisabled = value.trim()
+    ? sendIsDisabled
+    : disabled || sendBusy || keyBusy || !onQuickKey;
   const iconColor = controlDisabled ? theme.colors.textMuted : theme.colors.text;
   const activeIconColor = theme.colors.accent;
   const showClear = expanded && Boolean(onClear);
-  const snippets = useSnippets(showShortcuts);
+  const presentation = resolvePaneComposerPresentation({
+    visionControls,
+    showShortcuts,
+    showUpload,
+  });
+  const snippets = useSnippets(presentation.showShortcuts);
   const updateSnippets = useUpdateSnippets();
   const resetSnippets = useResetSnippets();
   const [snippetSheetVisible, setSnippetSheetVisible] = React.useState(false);
@@ -2593,7 +3086,7 @@ function PaneComposer({
   );
 
   const uploadButton =
-    expanded && showUpload ? (
+    expanded && presentation.showUpload ? (
       <Pressable
         accessibilityLabel="Upload image or file"
         style={[styles.paneComposerInlineButton, uploadBusy ? styles.disabledButton : null]}
@@ -2623,6 +3116,7 @@ function PaneComposer({
         accessibilityState={{ checked: following }}
         style={[
           styles.paneComposerFollowButton,
+          visionControls ? styles.visionFollowButton : null,
           following ? styles.paneComposerInlineButtonActive : null,
         ]}
         onPress={onToggleFollow}
@@ -2631,6 +3125,7 @@ function PaneComposer({
         <Text
           style={[
             styles.paneComposerFollowButtonText,
+            visionControls ? styles.visionFollowButtonText : null,
             following ? styles.paneComposerFollowButtonTextActive : null,
           ]}
         >
@@ -2639,8 +3134,8 @@ function PaneComposer({
       </Pressable>
     ) : null;
 
-  const input = (
-    <TextInput
+  const input = presentation.mountTextInput ? (
+    <KeyboardTextInput
       value={value}
       onChangeText={onChangeText}
       multiline={multiline ?? expanded}
@@ -2660,7 +3155,7 @@ function PaneComposer({
       placeholder={placeholder}
       placeholderTextColor={theme.colors.textMuted}
     />
-  );
+  ) : null;
 
   const sendButton = (
     <Pressable
@@ -2682,9 +3177,166 @@ function PaneComposer({
     </Pressable>
   );
 
+  if (visionControls) {
+    return (
+      <View style={[styles.paneComposer, styles.visionPaneComposer]}>
+        <View style={styles.visionDraftPreview}>
+          <Text
+            selectable
+            style={[
+              styles.visionDraftPreviewText,
+              !value ? styles.visionVoiceValuePlaceholder : null,
+            ]}
+          >
+            {value || "Tap Speak, then use Send when the transcription is ready."}
+          </Text>
+        </View>
+        <View style={styles.visionComposerPrimaryRow}>
+          {onExitFullscreen ? (
+            <Pressable
+              accessibilityLabel="Exit fullscreen terminal"
+              style={styles.visionComposerSquareButton}
+              onPress={onExitFullscreen}
+            >
+              <Minimize2 size={24} color={theme.colors.text} />
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityLabel={recognizing ? "Stop voice input" : "Start voice input"}
+            style={[
+              styles.visionComposerVoiceButton,
+              recognizing ? styles.visionVoiceButtonActive : null,
+              controlDisabled ? styles.disabledButton : null,
+            ]}
+            disabled={controlDisabled}
+            onPress={onToggleVoice}
+          >
+            {recognizing ? (
+              <VoiceWaveform />
+            ) : (
+              <Mic size={25} color={iconColor} />
+            )}
+            <Text
+              style={[
+                styles.visionComposerButtonText,
+                recognizing ? styles.visionVoiceButtonTextActive : null,
+              ]}
+            >
+              {recognizing ? "Stop" : "Speak"}
+            </Text>
+          </Pressable>
+          {onClear ? (
+            <Pressable
+              accessibilityLabel="Clear voice draft"
+              style={[
+                styles.visionComposerSquareButton,
+                !value || controlDisabled ? styles.disabledButton : null,
+              ]}
+              disabled={!value || controlDisabled}
+              onPress={() => {
+                onClear();
+                void Haptics.selectionAsync();
+              }}
+            >
+              <X size={24} color={!value || controlDisabled ? theme.colors.textMuted : theme.colors.text} />
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityLabel="Send voice input"
+            style={[
+              styles.visionComposerSendButton,
+              visionSendIsDisabled ? styles.disabledButton : null,
+            ]}
+            disabled={visionSendIsDisabled}
+            onPress={() => {
+              if (value.trim()) {
+                onSend();
+                return;
+              }
+              onQuickKey?.(VISION_QUICK_KEYS[0]);
+            }}
+          >
+            {sendBusy || keyBusy ? (
+              <ActivityIndicator color={theme.colors.surfaceRaised} />
+            ) : (
+              <Send size={24} color={theme.colors.surfaceRaised} />
+            )}
+            <Text style={styles.visionComposerSendText}>
+              {value.trim() ? "Send" : "Enter"}
+            </Text>
+          </Pressable>
+        </View>
+        <View style={styles.visionQuickKeyGrid}>
+          {VISION_QUICK_KEYS.map((entry) => (
+            <Pressable
+              key={entry.label}
+              accessibilityLabel={`Send ${entry.label} terminal key`}
+              style={[
+                styles.visionQuickKeyButton,
+                entry.danger ? styles.keyButtonDanger : null,
+                controlDisabled || !onQuickKey ? styles.disabledButton : null,
+              ]}
+              disabled={controlDisabled || !onQuickKey}
+              onPress={() => {
+                onQuickKey?.(entry);
+                void Haptics.selectionAsync();
+              }}
+            >
+              <Text
+                style={[
+                  styles.visionQuickKeyText,
+                  entry.danger ? styles.keyButtonTextDanger : null,
+                ]}
+              >
+                {entry.label}
+              </Text>
+            </Pressable>
+          ))}
+          <Pressable
+            accessibilityLabel="Open all terminal keys"
+            style={[
+              styles.visionQuickKeyButton,
+              controlDisabled ? styles.disabledButton : null,
+            ]}
+            disabled={controlDisabled}
+            onPress={onOpenKeys}
+          >
+            <Terminal size={22} color={iconColor} />
+            <Text style={styles.visionQuickKeyText}>More</Text>
+          </Pressable>
+        </View>
+        {followButton}
+        {reserveStatusSpace || status || error ? (
+          <Text style={styles.paneComposerStatus} numberOfLines={2}>
+            {status || error || ""}
+          </Text>
+        ) : null}
+        {error ? (
+          <View style={styles.retryRow}>
+            <Text style={styles.retryErrorText} numberOfLines={2}>
+              {error}
+            </Text>
+            <Pressable
+              style={[
+                styles.retryButton,
+                styles.visionRetryButton,
+                retryDisabled ? styles.disabledButton : null,
+              ]}
+              disabled={retryDisabled}
+              onPress={onRetry}
+            >
+              <RefreshCcw size={18} color={theme.colors.surfaceRaised} />
+              <Text style={styles.retryButtonText}>{retryLabel}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   return (
     <View style={styles.paneComposer}>
-      {showShortcuts ? (
+      {presentation.showShortcuts ? (
         <View style={styles.snippetBar}>
           <ScrollView
             horizontal
@@ -2787,7 +3439,7 @@ function PaneComposer({
             >
               <Send size={14} color={theme.colors.text} />
             </Pressable>
-            <TextInput
+            <KeyboardTextInput
               value={item.text}
               onChangeText={(text) => {
                 setSnippetDraftItems((current) =>
@@ -2838,7 +3490,7 @@ function PaneComposer({
           </View>
         ))}
         <View style={styles.snippetAddRow}>
-          <TextInput
+          <KeyboardTextInput
             value={snippetNewText}
             onChangeText={setSnippetNewText}
             autoCapitalize="none"
@@ -3116,6 +3768,7 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
           });
         }}
         onOpenKeys={() => setKeyboardVisible(true)}
+        onQuickKey={sendTerminalKey}
         onOpenUpload={() => setUploadPickerVisible(true)}
         onShortcut={appendText}
         onClear={() => {
@@ -3195,11 +3848,23 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
 
 function RenameModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
   const styles = useAppStyles();
+  const visionControls = useVisionControls();
+  const fieldPresentation = useFieldPresentation("window-name");
   const rename = useRenameWindow();
   const [name, setName] = React.useState("");
+  const [voiceStatus, setVoiceStatus] = React.useState("");
+  const renameVoice = useLocalVoiceInput({
+    scopeKey: target ? `rename-window:${agentCardKey(target)}` : "",
+    onText: setName,
+    onStatus: setVoiceStatus,
+    contextualStrings: [target?.windowName || "", target?.sessionName || "", "Codex", "Claude"].filter(Boolean),
+  });
 
   React.useEffect(() => {
-    if (target) setName(target.windowName || "");
+    if (target) {
+      setName(target.windowName || "");
+      setVoiceStatus("");
+    }
   }, [target]);
 
   return (
@@ -3207,17 +3872,37 @@ function RenameModal({ target, onClose }: { target: AgentSession | null; onClose
       <Text style={styles.sheetMeta} numberOfLines={2}>
         {target ? agentSubtitle(target) : ""}
       </Text>
-      <TextInput
-        value={name}
-        onChangeText={setName}
-        autoFocus
-        autoCapitalize="none"
-        autoCorrect={false}
-        numberOfLines={1}
-        style={styles.textInput}
-      />
+      {fieldPresentation === "voice" ? (
+        <VoiceValueField
+          label="Window name"
+          value={name}
+          emptyLabel="Speak a window name"
+          active={renameVoice.active}
+          status={voiceStatus}
+          onToggle={() => {
+            renameVoice.toggle().catch((error) => {
+              setVoiceStatus(error instanceof Error ? error.message : String(error));
+            });
+          }}
+          onClear={() => setName("")}
+        />
+      ) : (
+        <KeyboardTextInput
+          value={name}
+          onChangeText={setName}
+          autoFocus
+          autoCapitalize="none"
+          autoCorrect={false}
+          numberOfLines={1}
+          style={styles.textInput}
+        />
+      )}
       <Pressable
-        style={[styles.primaryButton, rename.isPending ? styles.disabledButton : null]}
+        style={[
+          styles.primaryButton,
+          visionControls ? styles.visionSubmitButton : null,
+          rename.isPending ? styles.disabledButton : null,
+        ]}
         disabled={!target || rename.isPending || !name.trim()}
         onPress={() => {
           if (!target) return;
@@ -3239,6 +3924,7 @@ function RenameModal({ target, onClose }: { target: AgentSession | null; onClose
 function WindowViewModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const visionControls = useVisionControls();
   const { width: windowWidth } = useWindowDimensions();
   const api = useTmuxMobileApi();
   const sendText = useSendText();
@@ -3520,6 +4206,13 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     refreshCapture(true).catch(() => {});
     scrollPaneTailToEnd(false);
   }, [refreshCapture, scrollPaneTailToEnd, terminalFollow, terminalText]);
+
+  const pauseTerminalForSelection = React.useCallback(() => {
+    terminalSelectionActiveRef.current = true;
+    setTerminalVisibleText(terminalText);
+    setTerminalAutoRefresh(false);
+    setTerminalFollow(false);
+  }, [terminalText]);
 
   const copyTerminalOutput = React.useCallback(async () => {
     await Clipboard.setStringAsync(stripUnsupportedAnsi(terminalText));
@@ -3807,7 +4500,16 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         keyboardShouldPersistTaps="handled"
       >
-        {Platform.OS === "ios" ? (
+        {visionControls ? (
+          <Text
+            accessibilityLabel="Terminal output"
+            selectable
+            onLongPress={pauseTerminalForSelection}
+            style={styles.terminalText}
+          >
+            {terminalPlainText || "No output."}
+          </Text>
+        ) : Platform.OS === "ios" ? (
           <TextInput
             key={`${terminalTargetKey}:${terminalSelectionResetKey}`}
             accessibilityLabel="Terminal output"
@@ -3847,6 +4549,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           });
         }}
         onOpenKeys={() => setTerminalKeyboardVisible(true)}
+        onQuickKey={sendTerminalKey}
         onOpenUpload={() => setTerminalUploadPickerVisible(true)}
         onShortcut={appendTerminalInput}
         onClear={() => {
@@ -4460,12 +5163,21 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
   const api = useTmuxMobileApi();
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const visionControls = useVisionControls();
+  const fieldPresentation = useFieldPresentation("artifact-name");
   const pins = usePins(visible);
   const renamePin = useRenamePin();
   const deletePin = useDeletePin();
   const [status, setStatus] = React.useState("");
   const [renameTarget, setRenameTarget] = React.useState<ArtifactPin | null>(null);
   const [renameName, setRenameName] = React.useState("");
+  const [renameVoiceStatus, setRenameVoiceStatus] = React.useState("");
+  const renameVoice = useLocalVoiceInput({
+    scopeKey: visible && renameTarget ? `rename-pin:${renameTarget.id}` : "",
+    onText: setRenameName,
+    onStatus: setRenameVoiceStatus,
+    contextualStrings: [renameTarget?.name || "", "artifact", "pin"].filter(Boolean),
+  });
   const data = pins.data?.pins || [];
   const refetchPins = pins.refetch;
 
@@ -4474,6 +5186,7 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
       setStatus("");
       setRenameTarget(null);
       setRenameName("");
+      setRenameVoiceStatus("");
       void refetchPins();
     }
   }, [refetchPins, visible]);
@@ -4513,6 +5226,7 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
       renamePin.reset();
       setRenameTarget(pin);
       setRenameName(pin.name || "");
+      setRenameVoiceStatus("");
       setStatus("");
     },
     [renamePin],
@@ -4585,22 +5299,41 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
       ) : null}
       {renameTarget ? (
         <View style={styles.pinRenameEditor}>
-          <Text style={styles.inputLabel} numberOfLines={1}>
-            Rename artifact
-          </Text>
-          <TextInput
-            accessibilityLabel="Artifact name"
-            value={renameName}
-            onChangeText={setRenameName}
-            editable={!renamePin.isPending}
-            autoFocus
-            autoCapitalize="sentences"
-            autoCorrect={false}
-            returnKeyType="done"
-            selectTextOnFocus
-            onSubmitEditing={submitRenamePin}
-            style={styles.textInput}
-          />
+          {fieldPresentation === "voice" ? (
+            <VoiceValueField
+              label="Artifact name"
+              value={renameName}
+              emptyLabel="Speak an artifact name"
+              active={renameVoice.active}
+              status={renameVoiceStatus}
+              disabled={renamePin.isPending}
+              onToggle={() => {
+                renameVoice.toggle().catch((error) => {
+                  setRenameVoiceStatus(error instanceof Error ? error.message : String(error));
+                });
+              }}
+              onClear={() => setRenameName("")}
+            />
+          ) : (
+            <>
+              <Text style={styles.inputLabel} numberOfLines={1}>
+                Rename artifact
+              </Text>
+              <KeyboardTextInput
+                accessibilityLabel="Artifact name"
+                value={renameName}
+                onChangeText={setRenameName}
+                editable={!renamePin.isPending}
+                autoFocus
+                autoCapitalize="sentences"
+                autoCorrect={false}
+                returnKeyType="done"
+                selectTextOnFocus
+                onSubmitEditing={submitRenamePin}
+                style={styles.textInput}
+              />
+            </>
+          )}
           <View style={styles.settingsButtonRow}>
             <Pressable
               accessibilityRole="button"
@@ -4608,6 +5341,7 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
               style={[
                 styles.settingsSecondaryButton,
                 styles.pinRenameButton,
+                visionControls ? styles.visionSubmitButton : null,
                 renamePin.isPending ? styles.disabledButton : null,
               ]}
               disabled={renamePin.isPending}
@@ -4628,6 +5362,7 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
               style={[
                 styles.settingsPrimaryButton,
                 styles.pinRenameButton,
+                visionControls ? styles.visionSubmitButton : null,
                 renamePin.isPending || !renameName.trim() || renameName.trim() === renameTarget.name
                   ? styles.disabledButton
                   : null,
@@ -4765,12 +5500,64 @@ function StartAgentModal({
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const visionControls = useVisionControls();
+  const cwdPresentation = useFieldPresentation("agent-cwd");
+  const muxPresentation = useFieldPresentation("agent-mux");
+  const sessionNamePresentation = useFieldPresentation("agent-session-name");
   const startAgent = useStartAgent();
   const [machineId, setMachineId] = React.useState("");
   const [kind, setKind] = React.useState<"claude" | "codex">("codex");
   const [cwd, setCwd] = React.useState("~");
   const [mux, setMux] = React.useState("tmux");
   const [sessionName, setSessionName] = React.useState("");
+  const [activeVoiceField, setActiveVoiceField] = React.useState<"cwd" | "mux" | "session" | null>(null);
+  const activeVoiceFieldRef = React.useRef<"cwd" | "mux" | "session" | null>(null);
+  const [voiceStatus, setVoiceStatus] = React.useState("");
+  const selectedMachine = machines.find((machine) => machineKey(machine) === machineId) || null;
+  const muxOptions = React.useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            selectedMachine?.mux,
+            ...(selectedMachine?.muxes || []).map((entry) => entry.mux),
+            "tmux",
+          ].filter((value): value is string => Boolean(value?.trim())),
+        ),
+      ),
+    [selectedMachine],
+  );
+  const formVoice = useLocalVoiceInput({
+    scopeKey: visible ? `start-agent:${machineId}` : "",
+    onText: (transcript) => {
+      if (activeVoiceFieldRef.current === "cwd") setCwd(transcript);
+      else if (activeVoiceFieldRef.current === "mux") setMux(transcript);
+      else if (activeVoiceFieldRef.current === "session") setSessionName(transcript);
+    },
+    onStatus: setVoiceStatus,
+    contextualStrings: [
+      "tmux",
+      "rmux",
+      "Codex",
+      "Claude",
+      selectedMachine?.agentCwd || "",
+      selectedMachine?.homeDir || "",
+      ...muxOptions,
+    ].filter(Boolean),
+  });
+
+  const toggleFormVoice = React.useCallback(
+    (field: "cwd" | "mux" | "session") => {
+      if (formVoice.active && activeVoiceFieldRef.current !== field) return;
+      activeVoiceFieldRef.current = field;
+      setActiveVoiceField(field);
+      setVoiceStatus("");
+      formVoice.toggle().catch((error) => {
+        setVoiceStatus(error instanceof Error ? error.message : String(error));
+      });
+    },
+    [formVoice],
+  );
 
   React.useEffect(() => {
     if (!visible) return;
@@ -4781,6 +5568,9 @@ function StartAgentModal({
     setCwd(selectedAgent?.cwd || machine?.agentCwd || machine?.homeDir || "~");
     setMux(selectedAgent?.mux || machine?.mux || machine?.muxes?.[0]?.mux || "tmux");
     setSessionName("");
+    activeVoiceFieldRef.current = null;
+    setActiveVoiceField(null);
+    setVoiceStatus("");
   }, [machines, selectedAgent, visible]);
 
   return (
@@ -4806,22 +5596,99 @@ function StartAgentModal({
           );
         })}
       </ScrollView>
-      <View style={styles.inputGroup}>
-        <Text style={styles.inputLabel}>Directory</Text>
-        <TextInput value={cwd} onChangeText={setCwd} autoCapitalize="none" style={styles.textInput} />
-      </View>
-      <View style={styles.twoCol}>
-        <View style={styles.twoColItem}>
-          <Text style={styles.inputLabel}>Mux</Text>
-          <TextInput value={mux} onChangeText={setMux} autoCapitalize="none" style={styles.textInput} />
+      {cwdPresentation === "voice" ? (
+        <VoiceValueField
+          label="Directory"
+          value={cwd}
+          emptyLabel="Speak a directory"
+          active={formVoice.active && activeVoiceField === "cwd"}
+          status={activeVoiceField === "cwd" ? voiceStatus : ""}
+          disabled={formVoice.active && activeVoiceField !== "cwd"}
+          onToggle={() => toggleFormVoice("cwd")}
+          onClear={() => setCwd("")}
+        />
+      ) : (
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Directory</Text>
+          <KeyboardTextInput value={cwd} onChangeText={setCwd} autoCapitalize="none" style={styles.textInput} />
         </View>
-        <View style={styles.twoColItem}>
-          <Text style={styles.inputLabel}>Session name</Text>
-          <TextInput value={sessionName} onChangeText={setSessionName} autoCapitalize="none" style={styles.textInput} />
+      )}
+      <View style={visionControls ? styles.visionFieldStack : styles.twoCol}>
+        <View style={visionControls ? styles.visionFieldStackItem : styles.twoColItem}>
+          {muxPresentation === "voice" ? (
+            <>
+              <VoiceValueField
+                label="Mux"
+                value={mux}
+                emptyLabel="Choose or speak a mux"
+                active={formVoice.active && activeVoiceField === "mux"}
+                status={activeVoiceField === "mux" ? voiceStatus : ""}
+                disabled={formVoice.active && activeVoiceField !== "mux"}
+                onToggle={() => toggleFormVoice("mux")}
+                onClear={() => setMux("")}
+              />
+              <View style={styles.visionMuxRow}>
+                {muxOptions.map((option) => (
+                  <Pressable
+                    key={option}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: mux === option }}
+                    style={[
+                      styles.visionMuxButton,
+                      mux === option ? styles.visionPreferenceButtonActive : null,
+                    ]}
+                    onPress={() => setMux(option)}
+                  >
+                    <Text
+                      style={[
+                        styles.visionPreferenceButtonText,
+                        mux === option ? styles.visionPreferenceButtonTextActive : null,
+                      ]}
+                    >
+                      {option}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={styles.inputLabel}>Mux</Text>
+              <KeyboardTextInput value={mux} onChangeText={setMux} autoCapitalize="none" style={styles.textInput} />
+            </>
+          )}
+        </View>
+        <View style={visionControls ? styles.visionFieldStackItem : styles.twoColItem}>
+          {sessionNamePresentation === "voice" ? (
+            <VoiceValueField
+              label="Session name"
+              value={sessionName}
+              emptyLabel="Optional"
+              active={formVoice.active && activeVoiceField === "session"}
+              status={activeVoiceField === "session" ? voiceStatus : ""}
+              disabled={formVoice.active && activeVoiceField !== "session"}
+              onToggle={() => toggleFormVoice("session")}
+              onClear={() => setSessionName("")}
+            />
+          ) : (
+            <>
+              <Text style={styles.inputLabel}>Session name</Text>
+              <KeyboardTextInput
+                value={sessionName}
+                onChangeText={setSessionName}
+                autoCapitalize="none"
+                style={styles.textInput}
+              />
+            </>
+          )}
         </View>
       </View>
       <Pressable
-        style={[styles.primaryButton, startAgent.isPending ? styles.disabledButton : null]}
+        style={[
+          styles.primaryButton,
+          visionControls ? styles.visionSubmitButton : null,
+          startAgent.isPending ? styles.disabledButton : null,
+        ]}
         disabled={startAgent.isPending || !machineId || !cwd.trim()}
         onPress={() => {
           startAgent.mutate(
@@ -5830,6 +6697,40 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     ...theme.typography.section,
     color: theme.colors.text,
   },
+  settingsSectionDescription: {
+    minWidth: 0,
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  visionPreferenceRow: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    gap: 10,
+  },
+  visionPreferenceButton: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 60,
+    paddingHorizontal: 12,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  visionPreferenceButtonActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
+  visionPreferenceButtonText: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  visionPreferenceButtonTextActive: {
+    color: theme.colors.accent,
+  },
   updateStatusCard: {
     width: "100%",
     minWidth: 0,
@@ -5960,6 +6861,52 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   loginButton: {
     width: "100%",
   },
+  visionModeActions: {
+    width: "100%",
+    minWidth: 0,
+    gap: 12,
+  },
+  visionModeChoiceButton: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 76,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  visionModeChoiceButtonPrimary: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.colors.accent,
+  },
+  visionModeChoiceTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  visionModeChoiceText: {
+    ...theme.typography.section,
+    fontSize: 18,
+    color: theme.colors.text,
+  },
+  visionModeChoiceMeta: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  visionModeChoicePrimaryText: {
+    ...theme.typography.section,
+    fontSize: 18,
+    color: theme.colors.surfaceRaised,
+  },
+  visionModeChoicePrimaryMeta: {
+    ...theme.typography.meta,
+    color: theme.colors.surfaceRaised,
+  },
   challengeBox: {
     borderRadius: theme.radii.lg,
     borderWidth: 1,
@@ -5999,10 +6946,210 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     paddingVertical: 10,
     ...theme.typography.body,
   },
+  visionVoiceField: {
+    width: "100%",
+    minWidth: 0,
+    gap: 10,
+  },
+  visionVoiceValue: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 64,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    justifyContent: "center",
+  },
+  visionVoiceValueText: {
+    minWidth: 0,
+    ...theme.typography.body,
+    fontSize: 17,
+    lineHeight: 24,
+    color: theme.colors.text,
+  },
+  visionVoiceValuePlaceholder: {
+    color: theme.colors.textMuted,
+  },
+  visionVoiceActionRow: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 12,
+  },
+  visionVoiceButton: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 64,
+    paddingHorizontal: 16,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  visionVoiceButtonActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
+  visionVoiceButtonText: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  visionVoiceButtonTextActive: {
+    color: theme.colors.accent,
+  },
+  visionVoiceClearButton: {
+    width: 64,
+    height: 64,
+    flexShrink: 0,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   paneComposer: {
     width: "100%",
     minWidth: 0,
     gap: 10,
+  },
+  visionPaneComposer: {
+    width: "100%",
+    minWidth: 0,
+    gap: 12,
+  },
+  visionDraftPreview: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 72,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    justifyContent: "center",
+  },
+  visionDraftPreviewText: {
+    minWidth: 0,
+    ...theme.typography.body,
+    fontSize: 17,
+    lineHeight: 24,
+    color: theme.colors.text,
+  },
+  visionComposerPrimaryRow: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "stretch",
+    gap: 12,
+  },
+  visionComposerSquareButton: {
+    width: 64,
+    height: 64,
+    flexShrink: 0,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  visionComposerVoiceButton: {
+    flexGrow: 1,
+    flexBasis: 160,
+    minWidth: 150,
+    minHeight: 64,
+    paddingHorizontal: 16,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  visionComposerSendButton: {
+    minWidth: 120,
+    minHeight: 64,
+    paddingHorizontal: 18,
+    borderRadius: theme.radii.lg,
+    backgroundColor: theme.colors.accent,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+  },
+  visionComposerButtonText: {
+    ...theme.typography.section,
+    fontSize: 17,
+    color: theme.colors.text,
+  },
+  visionComposerSendText: {
+    ...theme.typography.section,
+    fontSize: 17,
+    color: theme.colors.surfaceRaised,
+  },
+  visionQuickKeyGrid: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  visionQuickKeyButton: {
+    flexGrow: 1,
+    flexBasis: "28%",
+    minWidth: 90,
+    minHeight: 64,
+    paddingHorizontal: 12,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  visionQuickKeyText: {
+    ...theme.typography.section,
+    fontSize: 18,
+    color: theme.colors.text,
+  },
+  visionFollowButton: {
+    flexGrow: 1,
+    minWidth: 140,
+    minHeight: 64,
+    paddingHorizontal: 16,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+  },
+  visionFollowButtonText: {
+    ...theme.typography.section,
+    fontSize: 17,
+    color: theme.colors.text,
+  },
+  visionRetryButton: {
+    minHeight: 60,
+    paddingHorizontal: 16,
+  },
+  visionSubmitButton: {
+    minHeight: 64,
   },
   paneComposerCompactRow: {
     width: "100%",
@@ -6387,12 +7534,21 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     alignItems: "center",
     justifyContent: "center",
   },
+  visionKeyButton: {
+    minWidth: 72,
+    height: 64,
+    paddingHorizontal: 16,
+  },
   keyButtonDanger: {
     borderColor: theme.colors.danger,
   },
   keyButtonText: {
     ...theme.typography.meta,
     color: theme.colors.text,
+  },
+  visionKeyButtonText: {
+    ...theme.typography.section,
+    fontSize: 18,
   },
   keyButtonTextDanger: {
     color: theme.colors.danger,
@@ -6784,6 +7940,35 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     flex: 1,
     minWidth: 132,
     gap: 6,
+  },
+  visionFieldStack: {
+    width: "100%",
+    minWidth: 0,
+    gap: 12,
+  },
+  visionFieldStackItem: {
+    width: "100%",
+    minWidth: 0,
+    gap: 8,
+  },
+  visionMuxRow: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  visionMuxButton: {
+    flexGrow: 1,
+    minWidth: 96,
+    minHeight: 60,
+    paddingHorizontal: 16,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
   },
   });
 }

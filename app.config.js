@@ -2,13 +2,14 @@ const variant = process.env.APP_ENV || "development";
 const updateChannel = process.env.EAS_UPDATE_CHANNEL || (variant === "production" ? "production" : variant);
 const buildTime = process.env.BUILD_TIME || new Date().toISOString();
 const jsVersion = process.env.JS_UPDATE_VERSION || buildTime.replace(/[-:T]/g, "").slice(0, 12);
+const runtimeVersion = process.env.CJMUX_RUNTIME_VERSION || "2";
 
 export default {
   expo: {
     name: "CJMUX",
     slug: "tmux-mobile-mobile",
     version: "0.1.0",
-    runtimeVersion: "1",
+    runtimeVersion,
     updates: {
       url: "https://u.expo.dev/649f50ed-e509-4fbc-9d23-a8c9080ba635",
       requestHeaders: {
