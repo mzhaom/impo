@@ -5451,12 +5451,18 @@ function TranscriptModal({
   const styles = useAppStyles();
   const api = useTmuxMobileApi();
   const pinArtifact = usePinInlineArtifact();
+  const transcriptScrollRef = React.useRef<ScrollView | null>(null);
   const [data, setData] = React.useState<AgentTranscriptResponse | null>(null);
   const [error, setError] = React.useState("");
   const [pinStatus, setPinStatus] = React.useState("");
   const [pinningTurn, setPinningTurn] = React.useState<number | null>(null);
   const [loading, setLoading] = React.useState(false);
   const markdownStyle = React.useMemo(() => createMarkdownStyles(theme), [theme]);
+  const scrollTranscriptToBottom = React.useCallback(() => {
+    requestAnimationFrame(() => {
+      transcriptScrollRef.current?.scrollToEnd({ animated: false });
+    });
+  }, []);
   const openTranscriptFile = React.useCallback(
     (path: string) => {
       if (target) onOpenFile(target, path);
@@ -5559,13 +5565,19 @@ function TranscriptModal({
       title="Transcript"
       onClose={onClose}
       onDismiss={onDismiss}
+      onShow={scrollTranscriptToBottom}
       tall
       wide
     >
       {loading ? <ActivityIndicator /> : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       {pinStatus ? <Text style={styles.sheetMeta} numberOfLines={2}>{pinStatus}</Text> : null}
-      <ScrollView style={styles.transcriptBox}>
+      <ScrollView
+        ref={transcriptScrollRef}
+        style={styles.transcriptBox}
+        onLayout={scrollTranscriptToBottom}
+        onContentSizeChange={scrollTranscriptToBottom}
+      >
         {turns.length === 0 ? <Text style={styles.sheetMeta}>No structured transcript.</Text> : null}
         {turns.map((turn, index) => (
           <View key={`${index}-${turn.role}`} style={styles.turnRow}>
@@ -6179,6 +6191,7 @@ function SheetModal({
   children,
   onClose,
   onDismiss,
+  onShow,
   tall,
   wide,
   fullscreen,
@@ -6190,6 +6203,7 @@ function SheetModal({
   children: React.ReactNode;
   onClose: () => void;
   onDismiss?: () => void;
+  onShow?: () => void;
   tall?: boolean;
   wide?: boolean;
   fullscreen?: boolean;
@@ -6357,6 +6371,7 @@ function SheetModal({
       transparent
       animationType="slide"
       onDismiss={onDismiss}
+      onShow={onShow}
       onRequestClose={closeSheet}
     >
       <CJMUXKeyboardShortcutSurface
