@@ -60,7 +60,6 @@ import {
   ArrowDown,
   ArrowUp,
   CheckCircle,
-  Circle,
   CloudDownload,
   Copy,
   Edit3,
@@ -3563,9 +3562,6 @@ function PaneComposer({
   onShortcut,
   onClear,
   onRetry,
-  onCloseTerminal,
-  following = false,
-  onToggleFollow,
   recognizing = false,
   voiceRecording,
   voiceTranscribing = false,
@@ -3597,9 +3593,6 @@ function PaneComposer({
   onShortcut?: (value: string) => void;
   onClear?: () => void;
   onRetry?: () => void;
-  onCloseTerminal?: () => void;
-  following?: boolean;
-  onToggleFollow?: () => void;
   recognizing?: boolean;
   voiceRecording?: boolean;
   voiceTranscribing?: boolean;
@@ -3829,43 +3822,6 @@ function PaneComposer({
       </Pressable>
     ) : null;
 
-  const closeTerminalButton =
-    expanded && onCloseTerminal ? (
-      <Pressable
-        accessibilityLabel="Close terminal"
-        style={styles.paneComposerFullscreenExitButton}
-        onPress={onCloseTerminal}
-      >
-        <X size={17} color={theme.colors.danger} />
-      </Pressable>
-    ) : null;
-
-  const followButton =
-    expanded && onToggleFollow ? (
-      <Pressable
-        accessibilityRole="switch"
-        accessibilityLabel={following ? "Stop following terminal output" : "Follow terminal output"}
-        accessibilityState={{ checked: following }}
-        style={[
-          styles.paneComposerFollowButton,
-          visionControls ? styles.visionFollowButton : null,
-          following ? styles.paneComposerInlineButtonActive : null,
-        ]}
-        onPress={onToggleFollow}
-      >
-        <ArrowDown size={15} color={following ? activeIconColor : theme.colors.textMuted} />
-        <Text
-          style={[
-            styles.paneComposerFollowButtonText,
-            visionControls ? styles.visionFollowButtonText : null,
-            following ? styles.paneComposerFollowButtonTextActive : null,
-          ]}
-        >
-          {following ? "Following" : "Follow"}
-        </Text>
-      </Pressable>
-    ) : null;
-
   const input = presentation.mountTextInput ? (
     <KeyboardTextInput
       value={value}
@@ -4015,23 +3971,6 @@ function PaneComposer({
         </View>
         {visionMoreVisible ? (
           <View style={styles.visionMorePanel}>
-            {onCloseTerminal || followButton ? (
-              <View style={styles.visionMoreActionRow}>
-                {onCloseTerminal ? (
-                  <Pressable
-                    accessibilityLabel="Close terminal"
-                    style={styles.visionComposerSquareButton}
-                    onPress={() => {
-                      setVisionMoreVisible(false);
-                      onCloseTerminal();
-                    }}
-                  >
-                    <X size={21} color={theme.colors.danger} />
-                  </Pressable>
-                ) : null}
-                {followButton}
-              </View>
-            ) : null}
             {presentation.showQuickKeys || visionMoreVisible ? (
               <View style={styles.visionQuickKeyGrid}>
                 {VISION_QUICK_KEYS.map((entry) => (
@@ -4167,8 +4106,6 @@ function PaneComposer({
           <View style={styles.paneComposerInputShell}>
             {input}
             <View style={styles.paneComposerInlineActions}>
-              {followButton}
-              {closeTerminalButton}
               {uploadButton}
               {keysButton}
               {sendButton}
@@ -5412,13 +5349,10 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const [terminalKeyboardVisible, setTerminalKeyboardVisible] = React.useState(false);
   const [terminalUploadPickerVisible, setTerminalUploadPickerVisible] = React.useState(false);
   const [terminalUploading, setTerminalUploading] = React.useState(false);
-  const [terminalAutoRefresh, setTerminalAutoRefresh] = React.useState(true);
   const [terminalFollow, setTerminalFollow] = React.useState(true);
-  const [terminalFullscreen, setTerminalFullscreen] = React.useState(false);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
   const [loading, setLoading] = React.useState(false);
-  const [refreshing, setRefreshing] = React.useState(false);
   const terminalAutoFocus = windowWidth >= 760;
   const terminalTargetKey = target ? agentCardKey(target) : "";
   const previousTerminalTargetKeyRef = React.useRef("");
@@ -5468,10 +5402,9 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     const previousTargetKey = previousTerminalTargetKeyRef.current;
     previousTerminalTargetKeyRef.current = terminalTargetKey;
     if (terminalTargetKey && terminalTargetKey !== previousTargetKey) {
-      setTerminalFullscreen(false);
-      setTerminalFollow(terminalAutoRefresh);
+      setTerminalFollow(true);
     }
-  }, [terminalAutoRefresh, terminalTargetKey]);
+  }, [terminalTargetKey]);
 
   React.useEffect(() => {
     return () => {
@@ -5483,19 +5416,10 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const machineId = target ? agentMachineKey(target) : "";
   const terminalScopeKey = terminalTargetKey;
   const activePaneId = data?.capture?.paneId || data?.activePaneId || target?.paneId || "";
-  const cwd =
-    data?.panes?.find((pane) => pane.id === activePaneId)?.cwd ||
-    data?.directories?.cwd ||
-    target?.cwd ||
-    "";
-  const running = target?.waitingForInput ? "waiting" : target?.status || target?.turn || "";
-  const meta = [running, target?.turnCount ? `${target.turnCount} turns` : "", cwd].filter(Boolean).join(" · ");
-
   const refreshCapture = React.useCallback(
     async (silent = false) => {
       if (!api || !target || !activePaneId) return;
       if (!silent) {
-        setRefreshing(true);
         setStatus("Refreshing...");
       }
       try {
@@ -5506,8 +5430,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         if (!silent) setStatus("Refresh failed");
-      } finally {
-        if (!silent) setRefreshing(false);
       }
     },
     [activePaneId, api, machineId, target],
@@ -5585,7 +5507,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   );
 
   React.useEffect(() => {
-    if (!terminalAutoRefresh || !api || !target || !activePaneId) return;
+    if (!api || !target || !activePaneId) return;
     const intervalMs = target.status === "running" || target.waitingForInput
       ? TERMINAL_ACTIVE_REFRESH_MS
       : TERMINAL_IDLE_REFRESH_MS;
@@ -5599,7 +5521,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         });
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [activePaneId, api, refreshCapture, target, terminalAutoRefresh]);
+  }, [activePaneId, api, refreshCapture, target]);
 
   const terminalNodes = React.useMemo(() => renderAnsiText(terminalText), [terminalText]);
   const terminalShouldFollow = terminalFollow;
@@ -5618,17 +5540,10 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
       setTerminalFollow(false);
       return;
     }
-    setTerminalAutoRefresh(true);
     setTerminalFollow(true);
     refreshCapture(true).catch(() => {});
     scrollPaneTailToEnd(false);
   }, [refreshCapture, scrollPaneTailToEnd, terminalFollow]);
-
-  const copyTerminalOutput = React.useCallback(async () => {
-    await Clipboard.setStringAsync(stripUnsupportedAnsi(terminalText));
-    setStatus("Output copied");
-    void Haptics.selectionAsync();
-  }, [terminalText]);
 
   const appendTerminalInput = React.useCallback((value: string) => {
     const next = String(value || "").trim();
@@ -5812,7 +5727,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
 
   const closeTerminalModal = React.useCallback(() => {
     Keyboard.dismiss();
-    setTerminalFullscreen(false);
     onClose();
   }, [onClose]);
 
@@ -5823,63 +5737,41 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
       onClose={closeTerminalModal}
       tall
       wide
-      fullscreen={terminalFullscreen}
-      hideHeader={terminalFullscreen}
+      fullscreen
+      hideHeader
     >
-      {target && terminalFullscreen ? <StatusBar hidden /> : null}
-      <View style={[styles.terminalToolbar, terminalFullscreen ? styles.terminalToolbarHidden : null]}>
-        <View style={styles.terminalMetaBlock}>
-          <Text style={styles.terminalTitleLine} numberOfLines={1}>
-            {target ? agentTitle(target) : ""}
+      {target ? <StatusBar hidden /> : null}
+      <View style={styles.terminalFullscreenControls}>
+        <Pressable
+          accessibilityRole="switch"
+          accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}
+          accessibilityState={{ checked: terminalFollow }}
+          style={[
+            styles.paneComposerFollowButton,
+            terminalFollow ? styles.paneComposerInlineButtonActive : null,
+          ]}
+          onPress={toggleTerminalFollow}
+        >
+          <ArrowDown
+            size={15}
+            color={terminalFollow ? theme.colors.accent : theme.colors.textMuted}
+          />
+          <Text
+            style={[
+              styles.paneComposerFollowButtonText,
+              terminalFollow ? styles.paneComposerFollowButtonTextActive : null,
+            ]}
+          >
+            {terminalFollow ? "Following" : "Follow"}
           </Text>
-          <Text style={styles.sheetMeta} numberOfLines={1}>
-            {meta}
-          </Text>
-        </View>
-        <View style={styles.terminalToolbarActions}>
-          <ActionButton
-            icon={refreshing ? <ActivityIndicator color={theme.colors.text} /> : <RefreshCcw size={15} color={theme.colors.text} />}
-            label="Refresh terminal"
-            disabled={!target || refreshing}
-            onPress={() => {
-              refreshCapture(false).catch(() => {});
-            }}
-          />
-          <ActionButton
-            icon={
-              terminalAutoRefresh ? (
-                <CheckCircle size={15} color={theme.colors.accent} />
-              ) : (
-                <Circle size={15} color={theme.colors.textMuted} />
-              )
-            }
-            label={terminalAutoRefresh ? "Disable auto update" : "Enable auto update"}
-            active={terminalAutoRefresh}
-            onPress={() => {
-              const next = !terminalAutoRefresh;
-              setTerminalAutoRefresh(next);
-              setTerminalFollow(next);
-              if (next) {
-                scrollPaneTailToEnd(false);
-              }
-            }}
-          />
-          <ActionButton
-            icon={<Maximize2 size={15} color={theme.colors.text} />}
-            label="Fullscreen terminal"
-            onPress={() => {
-              setTerminalFullscreen(true);
-            }}
-          />
-          <ActionButton
-            icon={<Copy size={15} color={theme.colors.text} />}
-            label="Copy terminal output"
-            disabled={!terminalText}
-            onPress={() => {
-              copyTerminalOutput().catch(() => {});
-            }}
-          />
-        </View>
+        </Pressable>
+        <Pressable
+          accessibilityLabel="Close terminal"
+          style={styles.terminalCloseButton}
+          onPress={closeTerminalModal}
+        >
+          <X size={19} color={theme.colors.text} />
+        </Pressable>
       </View>
       {loading ? <ActivityIndicator /> : null}
       <ScrollView
@@ -5923,9 +5815,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           terminalInputRef.current = "";
         }}
         onRetry={() => sendTerminalInput({ submit: true })}
-        onCloseTerminal={terminalFullscreen ? closeTerminalModal : undefined}
-        following={terminalFollow}
-        onToggleFollow={terminalFullscreen ? toggleTerminalFollow : undefined}
         recognizing={terminalVoiceInput.active}
         voiceRecording={terminalVoiceInput.recording}
         voiceTranscribing={terminalVoiceInput.transcribing}
@@ -5934,14 +5823,14 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         keyBusy={sendKey.isPending}
         uploadBusy={terminalUploading}
         showUpload
-        showShortcuts={!terminalFullscreen}
+        showShortcuts={false}
         autoFocus={terminalAutoFocus}
         placeholder="Type a prompt, command, or note..."
         status={status || uploadFile.error?.message || ""}
         error={error}
         retryLabel="Retry send"
         retryDisabled={!target || sendText.isPending || sendKey.isPending}
-        reserveStatusSpace={!terminalFullscreen}
+        reserveStatusSpace={false}
       />
       <TerminalKeyboardSheet
         visible={terminalKeyboardVisible && Boolean(target)}
@@ -8993,7 +8882,7 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   paneComposerFollowButtonTextActive: {
     color: theme.colors.accent,
   },
-  paneComposerFullscreenExitButton: {
+  terminalCloseButton: {
     width: 44,
     height: 44,
     borderRadius: theme.radii.lg,
@@ -9551,32 +9440,12 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     color: theme.colors.danger,
     textAlign: "center",
   },
-  terminalToolbar: {
+  terminalFullscreenControls: {
     width: "100%",
     minWidth: 0,
-    minHeight: 40,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  terminalToolbarHidden: {
-    display: "none",
-  },
-  terminalMetaBlock: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  terminalTitleLine: {
-    minWidth: 0,
-    ...theme.typography.section,
-    color: theme.colors.text,
-  },
-  terminalToolbarActions: {
-    flexShrink: 0,
-    flexDirection: "row",
-    alignItems: "center",
+    justifyContent: "flex-end",
     gap: 8,
   },
   terminalStatusLine: {

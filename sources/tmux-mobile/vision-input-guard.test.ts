@@ -129,28 +129,24 @@ describe("Terminal ANSI rendering", () => {
 });
 
 describe("Terminal fullscreen behavior", () => {
-  it("opens windowed and makes fullscreen a one-way mode until the terminal closes", () => {
-    expect(appSource).toContain(
-      "const [terminalFullscreen, setTerminalFullscreen] = React.useState(false);",
-    );
-    expect(appSource).not.toContain(
-      "const [terminalFullscreen, setTerminalFullscreen] = React.useState(windowWidth >= 760);",
-    );
-    expect(appSource).toContain(
-      "onCloseTerminal={terminalFullscreen ? closeTerminalModal : undefined}",
-    );
-    expect(appSource).not.toContain("onExitFullscreen");
-    expect(appSource).not.toContain('accessibilityLabel="Exit fullscreen terminal"');
-    expect(appSource).toContain('accessibilityLabel="Close terminal"');
-    expect(appSource).toContain("onClose={closeTerminalModal}");
-    expect(appSource).toContain("setTerminalFullscreen(true);");
-    expect(appSource).toContain("setTerminalFullscreen(false);");
+  it("opens directly fullscreen with no windowed or fullscreen-toggle state", () => {
+    expect(appSource).not.toContain("const [terminalFullscreen");
+    expect(appSource).not.toContain("setTerminalFullscreen");
+    expect(appSource).not.toContain('label="Fullscreen terminal"');
+    expect(appSource).not.toContain('label="Exit fullscreen terminal"');
+    expect(appSource).toContain("fullscreen\n      hideHeader");
   });
 
-  it("keeps follow controls in fullscreen and lifts fullscreen sheets above the keyboard", () => {
-    expect(appSource).toContain(
-      "onToggleFollow={terminalFullscreen ? toggleTerminalFollow : undefined}",
-    );
+  it("keeps only follow and close in the top-right terminal controls", () => {
+    expect(appSource).toContain("style={styles.terminalFullscreenControls}");
+    expect(appSource).toContain('accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}');
+    expect(appSource).toContain('accessibilityLabel="Close terminal"');
+    expect(appSource).toContain("onClose={closeTerminalModal}");
+    expect(appSource).not.toContain("onCloseTerminal");
+    expect(appSource).not.toContain("onToggleFollow");
+  });
+
+  it("keeps follow behavior and lifts fullscreen sheets above the keyboard", () => {
     expect(appSource).toContain("const terminalShouldFollow = terminalFollow;");
     expect(appSource).toContain(
       "const keyboardAffectsSheet = fullscreenActive || !sheetIsWide || !tall;",
