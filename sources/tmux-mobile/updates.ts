@@ -3,6 +3,7 @@ import { AppState, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
+import { otaUpdatePolicy } from "@/tmux-mobile/ota-update-policy";
 
 const LAST_SEEN_RUNNING_UPDATE_KEY = "tmux-mobile.ota.last-seen-running-update";
 const AUTO_CHECK_DELAY_MS = 2_000;
@@ -51,6 +52,7 @@ export type OtaUpdateController = {
   statusLabel: string;
   isBusy: boolean;
   isReady: boolean;
+  applyLabel: string;
   notice: OtaUpdateNotice | null;
   info: OtaUpdateInfo;
   checkForUpdate: (source?: OtaUpdateCheckSource) => Promise<void>;
@@ -137,8 +139,16 @@ function buildInfo(currentlyRunning: CurrentlyRunningInfo, enabled: boolean): Ot
   };
 }
 
-export function useOtaUpdates(): OtaUpdateController {
+export function useOtaUpdates({
+  isVisionDevice = false,
+}: {
+  isVisionDevice?: boolean;
+} = {}): OtaUpdateController {
   const updatesState = Updates.useUpdates();
+  const policy = React.useMemo(
+    () => otaUpdatePolicy(isVisionDevice),
+    [isVisionDevice],
+  );
   const enabled = Platform.OS !== "web" && !__DEV__ && Updates.isEnabled;
   const [phase, setPhase] = React.useState<OtaUpdatePhase>(enabled ? "idle" : "disabled");
   const [notice, setNotice] = React.useState<OtaUpdateNotice | null>(null);
@@ -225,11 +235,11 @@ export function useOtaUpdates(): OtaUpdateController {
             setPhase("ready");
             showNotice({
               id: `ready-${Date.now()}`,
-              title: "Update ready",
-              message: "A new AMUX JS bundle has downloaded. Apply it when you are ready.",
+              title: policy.readyTitle,
+              message: policy.readyMessage,
               tone: "success",
               action: "apply",
-              actionLabel: "Apply",
+              actionLabel: policy.applyLabel,
             });
           } else {
             setPhase("idle");
@@ -269,11 +279,21 @@ export function useOtaUpdates(): OtaUpdateController {
         checkInFlightRef.current = false;
       }
     },
-    [enabled, info.channel, info.jsVersion, showNotice],
+    [enabled, info.channel, info.jsVersion, policy, showNotice],
   );
 
   const applyUpdate = React.useCallback(async () => {
     if (!enabled) return;
+    if (policy.applyMode === "cold-start") {
+      setPhase("ready");
+      setNotice({
+        id: `cold-start-${Date.now()}`,
+        title: policy.readyTitle,
+        message: policy.readyMessage,
+        tone: "info",
+      });
+      return;
+    }
     setPhase("restarting");
     setNotice({
       id: `restarting-${Date.now()}`,
@@ -296,7 +316,7 @@ export function useOtaUpdates(): OtaUpdateController {
         actionLabel: "Retry",
       });
     }
-  }, [enabled]);
+  }, [enabled, policy]);
 
   React.useEffect(() => {
     if (!enabled) {
@@ -326,13 +346,13 @@ export function useOtaUpdates(): OtaUpdateController {
     readyNoticeShownRef.current = true;
     showNotice({
       id: `ready-hook-${Date.now()}`,
-      title: "Update ready",
-      message: "A new AMUX JS bundle is downloaded. Apply it when you are ready.",
+      title: policy.readyTitle,
+      message: policy.readyMessage,
       tone: "success",
       action: "apply",
-      actionLabel: "Apply",
+      actionLabel: policy.applyLabel,
     });
-  }, [enabled, showNotice, updatesState.isUpdatePending]);
+  }, [enabled, policy, showNotice, updatesState.isUpdatePending]);
 
   React.useEffect(() => {
     if (!enabled || info.launchType !== "OTA" || !info.updateId) return;
@@ -379,9 +399,13 @@ export function useOtaUpdates(): OtaUpdateController {
 
   return {
     phase,
-    statusLabel: phaseLabel(phase, enabled),
+    statusLabel:
+      phase === "ready" && enabled
+        ? policy.readyStatusLabel
+        : phaseLabel(phase, enabled),
     isBusy,
     isReady,
+    applyLabel: policy.applyLabel,
     notice,
     info,
     checkForUpdate,

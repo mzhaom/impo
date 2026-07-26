@@ -765,7 +765,9 @@ function CommandCenterScreen() {
   );
   const styles = React.useMemo(() => createStyles(theme, layout), [layout, theme]);
   const relativeTimeNow = Date.now();
-  const otaUpdates = useOtaUpdates();
+  const otaUpdates = useOtaUpdates({
+    isVisionDevice: NATIVE_VISION_CONTROLS_DETECTED,
+  });
   const visionControlsEnabled = resolveVisionControls(
     visionControlsPreference,
     NATIVE_VISION_CONTROLS_DETECTED,
@@ -2843,7 +2845,7 @@ function SettingsModal({
             ) : (
               <DownloadIcon color={theme.colors.surfaceRaised} />
             )}
-            <Text style={styles.primaryButtonText}>Apply</Text>
+            <Text style={styles.primaryButtonText}>{ota.applyLabel}</Text>
           </Pressable>
         </View>
       </View>
