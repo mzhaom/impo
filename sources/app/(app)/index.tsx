@@ -140,7 +140,6 @@ import {
   FALLBACK_SNIPPETS,
   prioritizeGoalSnippet,
 } from "@/tmux-mobile/composer-snippets";
-import { resolveStandardVoiceInputPresentation } from "@/tmux-mobile/voice-input-presentation";
 import {
   resolveCommandCenterShortcut,
   type CommandCenterShortcutEvent,
@@ -3621,15 +3620,7 @@ function PaneComposer({
   const controlDisabled = disabled || busy;
   const sendIsDisabled = disabled || sendDisabled || sendBusy || keyBusy;
   const standardVoiceRecording = voiceRecording ?? recognizing;
-  const standardVoicePresentation = resolveStandardVoiceInputPresentation({
-    recording: standardVoiceRecording,
-    transcribing: voiceTranscribing,
-  });
   const standardVoiceActive = standardVoiceRecording || voiceTranscribing;
-  const standardVoiceDisabled =
-    disabled ||
-    voiceTranscribing ||
-    (!standardVoiceRecording && busy);
   const standardActionDisabled = controlDisabled || standardVoiceActive;
   const standardSendIsDisabled = sendIsDisabled || standardVoiceActive;
   const standardStatus = standardVoiceActive ? "" : status;
@@ -3661,12 +3652,6 @@ function PaneComposer({
   React.useEffect(() => {
     if (!visionControls) setVisionMoreVisible(false);
   }, [visionControls]);
-
-  const toggleStandardVoice = React.useCallback(() => {
-    Keyboard.dismiss();
-    void Haptics.selectionAsync();
-    onToggleVoice();
-  }, [onToggleVoice]);
 
   const openSnippetManager = React.useCallback(() => {
     setSnippetDraftItems(snippetItems);
@@ -3715,73 +3700,6 @@ function PaneComposer({
       )}
     </Pressable>
   );
-
-  const standardVoiceControl = expanded ? (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={standardVoicePresentation.accessibilityLabel}
-      accessibilityHint={
-        voiceTranscribing
-          ? "Speech is being added to the draft"
-          : standardVoiceRecording
-          ? "Stops recording and adds the transcription to the draft"
-          : "Starts voice recording for this draft"
-      }
-      accessibilityState={{
-        busy: voiceTranscribing,
-        disabled: standardVoiceDisabled,
-        selected: standardVoiceRecording,
-      }}
-      style={[
-        styles.standardVoiceControl,
-        standardVoiceRecording ? styles.standardVoiceControlRecording : null,
-        voiceTranscribing ? styles.standardVoiceControlTranscribing : null,
-        standardVoiceDisabled && !voiceTranscribing ? styles.disabledButton : null,
-      ]}
-      disabled={standardVoiceDisabled}
-      onPress={toggleStandardVoice}
-    >
-      <View
-        style={[
-          styles.standardVoiceIndicator,
-          standardVoiceRecording ? styles.standardVoiceIndicatorRecording : null,
-          voiceTranscribing ? styles.standardVoiceIndicatorTranscribing : null,
-        ]}
-      >
-        {voiceTranscribing ? (
-          <ActivityIndicator size="small" color={theme.colors.accent} />
-        ) : standardVoiceRecording ? (
-          <VoiceWaveform color={theme.colors.surfaceRaised} />
-        ) : (
-          <Mic size={20} color={theme.colors.surfaceRaised} />
-        )}
-      </View>
-      <View style={styles.standardVoiceTextBlock}>
-        <Text
-          style={[
-            styles.standardVoiceTitle,
-            standardVoiceRecording ? styles.standardVoiceTitleRecording : null,
-          ]}
-          numberOfLines={1}
-        >
-          {standardVoicePresentation.title}
-        </Text>
-        <Text style={styles.standardVoiceDetail} numberOfLines={1}>
-          {standardVoicePresentation.detail}
-        </Text>
-      </View>
-      {standardVoicePresentation.actionLabel ? (
-        <Text
-          style={[
-            styles.standardVoiceAction,
-            standardVoiceRecording ? styles.standardVoiceActionRecording : null,
-          ]}
-        >
-          {standardVoicePresentation.actionLabel}
-        </Text>
-      ) : null}
-    </Pressable>
-  ) : null;
 
   const keysButton = (
     <Pressable
@@ -4102,7 +4020,6 @@ function PaneComposer({
       ) : null}
       {expanded ? (
         <>
-          {standardVoiceControl}
           <View style={styles.paneComposerInputShell}>
             {input}
             <View style={styles.paneComposerInlineActions}>
@@ -5823,7 +5740,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         keyBusy={sendKey.isPending}
         uploadBusy={terminalUploading}
         showUpload
-        showShortcuts={false}
+        showShortcuts
         autoFocus={terminalAutoFocus}
         placeholder="Type a prompt, command, or note..."
         status={status || uploadFile.error?.message || ""}
@@ -8924,69 +8841,6 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     backgroundColor: theme.colors.accent,
     alignItems: "center",
     justifyContent: "center",
-  },
-  standardVoiceControl: {
-    width: "100%",
-    minWidth: 0,
-    minHeight: layout.isWide ? 56 : 60,
-    paddingHorizontal: layout.isWide ? 14 : 10,
-    paddingVertical: 8,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceRaised,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 11,
-  },
-  standardVoiceControlRecording: {
-    borderColor: theme.colors.danger,
-    backgroundColor: theme.dark ? "#321d1d" : "#fff5f5",
-  },
-  standardVoiceControlTranscribing: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.dark ? "#1b2936" : "#f2f6fb",
-  },
-  standardVoiceIndicator: {
-    width: 40,
-    height: 40,
-    flexShrink: 0,
-    borderRadius: theme.radii.lg,
-    backgroundColor: theme.colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  standardVoiceIndicatorRecording: {
-    backgroundColor: theme.colors.danger,
-  },
-  standardVoiceIndicatorTranscribing: {
-    backgroundColor: theme.colors.surfaceRaised,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  standardVoiceTextBlock: {
-    flex: 1,
-    minWidth: 0,
-    gap: 1,
-  },
-  standardVoiceTitle: {
-    ...theme.typography.section,
-    color: theme.colors.text,
-  },
-  standardVoiceTitleRecording: {
-    color: theme.colors.danger,
-  },
-  standardVoiceDetail: {
-    ...theme.typography.meta,
-    color: theme.colors.textMuted,
-  },
-  standardVoiceAction: {
-    flexShrink: 0,
-    ...theme.typography.section,
-    color: theme.colors.accent,
-  },
-  standardVoiceActionRecording: {
-    color: theme.colors.danger,
   },
   paneComposerSubmitButton: {
     width: "100%",

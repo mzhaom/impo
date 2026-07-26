@@ -146,10 +146,26 @@ describe("Terminal fullscreen behavior", () => {
     expect(appSource).not.toContain("onToggleFollow");
   });
 
+  it("keeps prompt suggestions available in the fullscreen terminal", () => {
+    expect(appSource).toContain("showUpload\n        showShortcuts");
+  });
+
   it("keeps follow behavior and lifts fullscreen sheets above the keyboard", () => {
     expect(appSource).toContain("const terminalShouldFollow = terminalFollow;");
     expect(appSource).toContain(
       "const keyboardAffectsSheet = fullscreenActive || !sheetIsWide || !tall;",
+    );
+  });
+});
+
+describe("Voice input device presentation", () => {
+  it("keeps the dedicated voice row exclusive to Vision controls", () => {
+    expect(appSource).not.toContain("standardVoiceControl");
+    expect(appSource).not.toContain('title: "Voice input"');
+    expect(appSource).toContain("if (visionControls) {");
+    expect(appSource).toContain("style={styles.visionComposerPrimaryRow}");
+    expect(appSource).toContain(
+      'accessibilityLabel={recognizing ? "Stop voice input" : "Start voice input"}',
     );
   });
 });
