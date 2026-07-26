@@ -4,6 +4,13 @@ public final class CJMUXBlinkTerminalModule: Module {
   public func definition() -> ModuleDefinition {
     Name("CJMUXBlinkTerminal")
 
+    AsyncFunction("ensureManagedIdentity") {
+      (installMarker: String?) -> [String: String] in
+      try BlinkSSHIdentity.ensureManagedIdentity(
+        installMarker: installMarker
+      ).dictionary
+    }
+
     View(CJMUXBlinkTerminalView.self) {
       Events(
         "onReady",
@@ -30,6 +37,10 @@ public final class CJMUXBlinkTerminalModule: Module {
 
       Prop("privateKey") { (view, value: String?) in
         view.pendingConfiguration.privateKey = value ?? ""
+      }
+
+      Prop("identityId") { (view, value: String?) in
+        view.pendingConfiguration.identityId = value ?? ""
       }
 
       Prop("command") { (view, value: String?) in

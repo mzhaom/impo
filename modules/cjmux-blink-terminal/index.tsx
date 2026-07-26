@@ -42,12 +42,26 @@ export type BlinkTerminalHandle = {
   paste(): Promise<void>;
 };
 
+export type BlinkSSHManagedIdentity = {
+  identityId: string;
+  deviceId: string;
+  publicKey: string;
+  fingerprint: string;
+};
+
+type NativeBlinkTerminalModule = {
+  ensureManagedIdentity(
+    installMarker: string | null,
+  ): Promise<BlinkSSHManagedIdentity>;
+};
+
 type NativeBlinkTerminalProps = ViewProps & {
   host: string;
   user: string;
   port: number;
   password?: string;
   privateKey?: string;
+  identityId?: string;
   command?: string;
   connectionKey: string;
   autoFocus?: boolean;
@@ -65,7 +79,9 @@ type NativeBlinkTerminalProps = ViewProps & {
 
 const nativeModule =
   Platform.OS === "ios"
-    ? requireOptionalNativeModule("CJMUXBlinkTerminal")
+    ? requireOptionalNativeModule<NativeBlinkTerminalModule>(
+        "CJMUXBlinkTerminal",
+      )
     : null;
 
 const NativeBlinkTerminal = nativeModule
@@ -77,6 +93,15 @@ const NativeBlinkTerminal = nativeModule
   : null;
 
 export const hasNativeCJMUXBlinkTerminal = NativeBlinkTerminal !== null;
+
+export async function ensureCJMUXBlinkSSHManagedIdentity(
+  installMarker: string | null,
+): Promise<BlinkSSHManagedIdentity> {
+  if (!nativeModule) {
+    throw new Error("The native Blink SSH module is unavailable on this device.");
+  }
+  return nativeModule.ensureManagedIdentity(installMarker);
+}
 
 export const CJMUXBlinkTerminal = React.forwardRef<
   BlinkTerminalHandle,

@@ -227,7 +227,7 @@ final class BlinkSSHSession {
             receiveCompletion: { [weak self] completion in
               guard let self else { return }
               if case .failure(let error) = completion {
-                self.finish(reason: error.localizedDescription, publishExit: true)
+                self.finish(reason: self.userFacingMessage(for: error), publishExit: true)
               }
             },
             receiveValue: { [weak self] stream in
@@ -244,7 +244,7 @@ final class BlinkSSHSession {
           }
         }
       } catch {
-        finish(reason: error.localizedDescription, publishExit: true)
+        finish(reason: userFacingMessage(for: error), publishExit: true)
       }
 
       // A disconnect can set stopped between two run-loop iterations. Process
@@ -260,6 +260,16 @@ final class BlinkSSHSession {
 
   private func authenticationMethods() throws -> [AuthMethod] {
     var methods: [AuthMethod] = []
+    if !configuration.identityId.isEmpty {
+      methods.append(
+        AuthPublicKey(
+          privateKey: try BlinkSSHIdentity.privateKey(
+            identityId: configuration.identityId
+          ),
+          keyName: "CJMUX managed key"
+        )
+      )
+    }
     if !configuration.privateKey.isEmpty {
       methods.append(
         AuthPublicKey(
@@ -348,7 +358,8 @@ final class BlinkSSHSession {
       self?.finish(reason: "Remote terminal closed.", publishExit: true)
     }
     stream.handleFailure = { [weak self] error in
-      self?.finish(reason: error.localizedDescription, publishExit: true)
+      guard let self else { return }
+      self.finish(reason: self.userFacingMessage(for: error), publishExit: true)
     }
     stream.connect(stdout: output, stdin: input, stderr: output)
 
@@ -422,6 +433,18 @@ final class BlinkSSHSession {
   private func publishState(_ state: String, message: String?) {
     DispatchQueue.main.async { [weak self] in
       self?.onStateChange?(state, message)
+    }
+  }
+
+  private func userFacingMessage(for error: Error) -> String {
+    guard let sshError = error as? SSHError else {
+      return error.localizedDescription
+    }
+    switch sshError {
+    case .connError:
+      return "\(sshError.description) If this is a local address, also check that CJMUX has Local Network access in iOS Settings."
+    default:
+      return sshError.description
     }
   }
 

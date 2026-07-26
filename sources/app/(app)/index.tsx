@@ -24,6 +24,7 @@ import {
 import type { StyleProp, TextInputProps, TextStyle } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
+import Constants from "expo-constants";
 import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
@@ -96,6 +97,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { TmuxMobileApi } from "@/tmux-mobile/api";
 import { useTmuxMobileApi, useTmuxMobileAuth } from "@/tmux-mobile/auth";
+import { sshDeviceIdentityManager } from "@/tmux-mobile/ssh-device-identity-storage";
 import { renderAnsiText, stripUnsupportedAnsi } from "@/tmux-mobile/ansi";
 import {
   cardStarsKey,
@@ -213,6 +215,17 @@ type StoredSshProfile = {
   password?: string;
   privateKey?: string;
 };
+
+type ManagedSshProfile = {
+  version: 1;
+  host: string;
+  user: string;
+  port: number;
+  authMethod: "managed-key";
+  identityId: string;
+};
+
+type ActiveSshProfile = StoredSshProfile | ManagedSshProfile;
 
 const SSH_PROFILE_KEY_PREFIX = "tmux-mobile.ssh-profile.v1";
 
@@ -4725,11 +4738,15 @@ function EmbeddedSshModal({
   const theme = useAppTheme();
   const styles = useAppStyles();
   const visionControls = useVisionControls();
+  const api = useTmuxMobileApi();
   const { width: windowWidth } = useWindowDimensions();
   const terminalRef = React.useRef<BlinkTerminalHandle | null>(null);
   const [profileLoading, setProfileLoading] = React.useState(false);
-  const [profile, setProfile] = React.useState<StoredSshProfile | null>(null);
-  const [editing, setEditing] = React.useState(true);
+  const [profile, setProfile] = React.useState<ActiveSshProfile | null>(null);
+  const [manualProfile, setManualProfile] = React.useState<StoredSshProfile | null>(null);
+  const [profileSource, setProfileSource] = React.useState<"managed" | "manual" | null>(null);
+  const [managedHostCandidates, setManagedHostCandidates] = React.useState<string[]>([]);
+  const [editing, setEditing] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [profileError, setProfileError] = React.useState("");
   const [host, setHost] = React.useState("");
@@ -4742,9 +4759,13 @@ function EmbeddedSshModal({
   const [connectionMessage, setConnectionMessage] = React.useState("");
   const [connectionGeneration, setConnectionGeneration] = React.useState(0);
   const machineId = target ? agentMachineKey(target) : "";
+  const routedMachineId = String(target?.machineId || "");
   const targetHost = target?.machineHostname || "";
   const profileKey = target ? sshProfileStorageKey(controllerUrl, machineId) : "";
   const isWide = windowWidth >= 760;
+  const deviceLabel =
+    Constants.deviceName ||
+    (Platform.OS === "ios" && Platform.isPad ? "CJMUX on iPad" : "CJMUX on iPhone");
 
   const loadDraft = React.useCallback((nextProfile: StoredSshProfile | null, nextHost: string) => {
     setHost(nextProfile?.host || nextHost);
@@ -4755,14 +4776,75 @@ function EmbeddedSshModal({
     setPrivateKey(nextProfile?.privateKey || "");
   }, []);
 
+  const requestManagedProfile = React.useCallback(async (preferredHost = "") => {
+    if (!api || !routedMachineId) {
+      throw new Error("The Controller is unavailable.");
+    }
+
+    const identity = await sshDeviceIdentityManager.ensure();
+    const authorization = await api.authorizeSsh(routedMachineId, {
+      publicKey: identity.publicKey,
+      deviceId: identity.deviceId,
+      deviceLabel,
+    });
+    const reportedHost = String(authorization.host || "").trim();
+    const authorizedHosts = [
+      ...(Array.isArray(authorization.sshHosts) ? authorization.sshHosts : []),
+      reportedHost,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter((value, index, values) => value && values.indexOf(value) === index);
+    const authorizedHost =
+      (preferredHost && authorizedHosts.includes(preferredHost) ? preferredHost : "") ||
+      authorizedHosts.find((candidate) => candidate.toLowerCase().endsWith(".local")) ||
+      reportedHost ||
+      authorizedHosts[0] ||
+      "";
+    const authorizedUser = String(authorization.user || "").trim();
+    const authorizedPort = Number(authorization.port);
+    const authorizedFingerprint = String(authorization.fingerprint || "").trim();
+    if (
+      authorization.ok !== true ||
+      authorization.authorized !== true ||
+      !authorizedHost ||
+      !authorizedUser ||
+      !authorizedFingerprint ||
+      !Number.isInteger(authorizedPort) ||
+      authorizedPort < 1 ||
+      authorizedPort > 65_535
+    ) {
+      throw new Error("The Controller returned an incomplete SSH endpoint.");
+    }
+    if (authorizedFingerprint !== identity.fingerprint) {
+      throw new Error("The machine authorized a different SSH key fingerprint.");
+    }
+
+    return {
+      profile: {
+        version: 1,
+        host: authorizedHost,
+        user: authorizedUser,
+        port: authorizedPort,
+        authMethod: "managed-key",
+        identityId: identity.identityId,
+      } satisfies ManagedSshProfile,
+      installed: authorization.installed,
+      hosts: authorizedHosts,
+    };
+  }, [api, deviceLabel, routedMachineId]);
+
   React.useEffect(() => {
     let cancelled = false;
     terminalRef.current = null;
     setProfile(null);
+    setManualProfile(null);
+    setProfileSource(null);
+    setManagedHostCandidates([]);
     setConnectionState("idle");
     setConnectionMessage("");
     setProfileError("");
     setSaving(false);
+    setEditing(false);
     loadDraft(null, targetHost);
     if (!profileKey || visionControls) {
       setProfileLoading(false);
@@ -4773,32 +4855,74 @@ function EmbeddedSshModal({
     }
 
     setProfileLoading(true);
-    void SecureStore.getItemAsync(profileKey)
-      .then((value) => {
-        if (cancelled) return;
-        const stored = readStoredSshProfile(value);
-        setProfile(stored);
-        setEditing(!stored);
-        loadDraft(stored, targetHost);
+    setConnectionState("connecting");
+    setConnectionMessage("Creating this installation’s secure SSH identity…");
+    void (async () => {
+      let stored: StoredSshProfile | null = null;
+      let manualLoadError = "";
+      try {
+        const value = await SecureStore.getItemAsync(profileKey);
+        stored = readStoredSshProfile(value);
         if (value && !stored) {
-          setProfileError("The saved SSH profile could not be read. Enter it again.");
+          manualLoadError = "The saved manual SSH profile could not be read.";
         }
-      })
-      .catch((error) => {
+      } catch (error) {
+        manualLoadError =
+          error instanceof Error ? error.message : "Could not read the saved manual SSH profile.";
+      }
+      if (cancelled) return;
+      setManualProfile(stored);
+
+      try {
+        setConnectionMessage("Authorizing this installation on the selected machine…");
+        const managed = await requestManagedProfile();
         if (cancelled) return;
-        setEditing(true);
-        setProfileError(
-          error instanceof Error ? error.message : "Could not read the saved SSH profile.",
+        // The Controller endpoint is authoritative. In particular, it replaces
+        // old profiles whose host was only a display alias such as "MacBook".
+        setProfile(managed.profile);
+        setProfileSource("managed");
+        setManagedHostCandidates(managed.hosts);
+        setEditing(false);
+        setConnectionState("connecting");
+        setConnectionMessage(
+          managed.installed
+            ? "Device key installed. Connecting with Blink SSH…"
+            : "Device key authorized. Connecting with Blink SSH…",
         );
-      })
-      .finally(() => {
+        setConnectionGeneration((generation) => generation + 1);
+      } catch (error) {
+        if (cancelled) return;
+        const reason = error instanceof Error ? error.message : String(error);
+        setProfile(null);
+        setProfileSource(null);
+        setEditing(true);
+        setConnectionState("failed");
+        setConnectionMessage(reason);
+        loadDraft(stored, targetHost);
+        setProfileError(
+          [
+            `Automatic SSH setup failed: ${reason}`,
+            manualLoadError,
+            "You can use a manual SSH profile below.",
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+      } finally {
         if (!cancelled) setProfileLoading(false);
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [loadDraft, profileKey, targetHost, visionControls]);
+  }, [
+    loadDraft,
+    profileKey,
+    requestManagedProfile,
+    targetHost,
+    visionControls,
+  ]);
 
   const saveProfile = React.useCallback(async () => {
     const nextPort = Number(port);
@@ -4838,7 +4962,9 @@ function EmbeddedSshModal({
     setProfileError("");
     try {
       await SecureStore.setItemAsync(profileKey, JSON.stringify(nextProfile));
+      setManualProfile(nextProfile);
       setProfile(nextProfile);
+      setProfileSource("manual");
       setEditing(false);
       setConnectionState("connecting");
       setConnectionMessage("Opening a native Blink SSH session…");
@@ -4855,10 +4981,10 @@ function EmbeddedSshModal({
 
   const beginEditing = React.useCallback(() => {
     void terminalRef.current?.disconnect().catch(() => {});
-    if (profile) loadDraft(profile, targetHost);
+    loadDraft(manualProfile, targetHost);
     setProfileError("");
     setEditing(true);
-  }, [loadDraft, profile, targetHost]);
+  }, [loadDraft, manualProfile, targetHost]);
 
   const forgetProfile = React.useCallback(() => {
     if (!profileKey) return;
@@ -4871,21 +4997,27 @@ function EmbeddedSshModal({
           text: "Forget",
           style: "destructive",
           onPress: () => {
-            void terminalRef.current?.disconnect().catch(() => {});
+            if (profileSource === "manual") {
+              void terminalRef.current?.disconnect().catch(() => {});
+            }
             void SecureStore.deleteItemAsync(profileKey)
               .catch(() => {})
               .finally(() => {
-                setProfile(null);
+                setManualProfile(null);
                 loadDraft(null, targetHost);
-                setEditing(true);
-                setConnectionState("idle");
-                setConnectionMessage("");
+                if (profileSource === "manual") {
+                  setProfile(null);
+                  setProfileSource(null);
+                  setEditing(true);
+                  setConnectionState("idle");
+                  setConnectionMessage("");
+                }
               });
           },
         },
       ],
     );
-  }, [loadDraft, profileKey, targetHost]);
+  }, [loadDraft, profileKey, profileSource, targetHost]);
 
   const close = React.useCallback(() => {
     void terminalRef.current?.disconnect().catch(() => {});
@@ -4920,14 +5052,64 @@ function EmbeddedSshModal({
     [profile?.host],
   );
 
+  const reconnectManaged = React.useCallback((preferredHost = "") => {
+    setConnectionState("connecting");
+    setConnectionMessage("Re-authorizing this installation…");
+    void terminalRef.current?.disconnect().catch(() => {});
+    void requestManagedProfile(preferredHost)
+      .then((managed) => {
+        setProfile(managed.profile);
+        setProfileSource("managed");
+        setManagedHostCandidates(managed.hosts);
+        setConnectionState("connecting");
+        setConnectionMessage("Device key authorized. Reconnecting with Blink SSH…");
+        setConnectionGeneration((generation) => generation + 1);
+      })
+      .catch((error) => {
+        setConnectionState("failed");
+        setConnectionMessage(error instanceof Error ? error.message : String(error));
+      });
+  }, [requestManagedProfile]);
+
   const reconnect = React.useCallback(() => {
     setConnectionState("connecting");
-    setConnectionMessage("Reconnecting…");
-    void terminalRef.current?.reconnect().catch((error) => {
-      setConnectionState("failed");
-      setConnectionMessage(error instanceof Error ? error.message : String(error));
-    });
-  }, []);
+    if (profileSource === "manual") {
+      setConnectionMessage("Reconnecting with the manual profile…");
+      void terminalRef.current?.reconnect().catch((error) => {
+        setConnectionState("failed");
+        setConnectionMessage(error instanceof Error ? error.message : String(error));
+      });
+      return;
+    }
+
+    reconnectManaged(profile?.host || "");
+  }, [profile?.host, profileSource, reconnectManaged]);
+
+  const resumeManagedConnection = React.useCallback(() => {
+    setProfileLoading(true);
+    setProfileError("");
+    setConnectionState("connecting");
+    setConnectionMessage("Re-authorizing this installation…");
+    void requestManagedProfile(profile?.host || "")
+      .then((managed) => {
+        setProfile(managed.profile);
+        setProfileSource("managed");
+        setManagedHostCandidates(managed.hosts);
+        setConnectionGeneration((generation) => generation + 1);
+        setEditing(false);
+      })
+      .catch((error) => {
+        const reason = error instanceof Error ? error.message : String(error);
+        setConnectionState("failed");
+        setConnectionMessage(reason);
+        setProfileError(
+          `Automatic SSH setup failed: ${reason} You can use the manual fallback below.`,
+        );
+      })
+      .finally(() => {
+        setProfileLoading(false);
+      });
+  }, [profile?.host, requestManagedProfile]);
 
   const disconnect = React.useCallback(() => {
     void terminalRef.current?.disconnect()
@@ -4944,7 +5126,9 @@ function EmbeddedSshModal({
   const setup = profileLoading ? (
     <View style={styles.sshLoading}>
       <ActivityIndicator color={theme.colors.accent} />
-      <Text style={styles.sshMutedText}>Loading the saved SSH profile…</Text>
+      <Text style={styles.sshMutedText}>
+        Authorizing this installation for passwordless SSH…
+      </Text>
     </View>
   ) : (
     <ScrollView
@@ -4955,10 +5139,10 @@ function EmbeddedSshModal({
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.sshSetupIntro}>
-        <Text style={styles.sshSetupTitle}>Connect with Blink SSH</Text>
+        <Text style={styles.sshSetupTitle}>Manual SSH fallback</Text>
         <Text style={styles.sshMutedText}>
-          The credential is kept in this device’s secure store for this controller and machine.
-          Terminal traffic stays in the native SSH view.
+          CJMUX normally installs this app installation’s public key automatically. Use this form
+          only when the Controller or Connector cannot authorize it.
         </Text>
       </View>
       <View style={[styles.sshSetupRow, isWide ? null : styles.sshSetupRowNarrow]}>
@@ -5061,11 +5245,17 @@ function EmbeddedSshModal({
             accessibilityRole="button"
             style={styles.sshSecondaryButton}
             onPress={() => {
-              setEditing(false);
-              setProfileError("");
+              if (profileSource === "managed") {
+                resumeManagedConnection();
+              } else {
+                setEditing(false);
+                setProfileError("");
+              }
             }}
           >
-            <Text style={styles.sshSecondaryButtonText}>Cancel</Text>
+            <Text style={styles.sshSecondaryButtonText}>
+              {profileSource === "managed" ? "Use automatic SSH" : "Cancel"}
+            </Text>
           </Pressable>
         ) : null}
         <Pressable
@@ -5101,6 +5291,11 @@ function EmbeddedSshModal({
             <Text style={styles.sshRailEndpoint} numberOfLines={1}>
               {profile.user}@{profile.host}:{profile.port}
             </Text>
+            <Text style={styles.sshRailEndpoint} numberOfLines={1}>
+              {profileSource === "managed"
+                ? "Per-install managed key"
+                : "Manual fallback profile"}
+            </Text>
           </View>
         </View>
         <View style={styles.sshStatusRow}>
@@ -5121,6 +5316,32 @@ function EmbeddedSshModal({
             {connectionMessage}
           </Text>
         ) : null}
+        {profileSource === "managed" && managedHostCandidates.length > 1 ? (
+          <View style={styles.sshRailActions}>
+            <Text style={styles.inputLabel}>SSH address</Text>
+            {managedHostCandidates.map((candidate) => {
+              const selected = candidate === profile.host;
+              return (
+                <Pressable
+                  key={candidate}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  style={styles.sshRailButton}
+                  onPress={() => reconnectManaged(candidate)}
+                >
+                  {selected ? (
+                    <Check size={15} color={theme.colors.success} />
+                  ) : (
+                    <Link2 size={15} color={theme.colors.text} />
+                  )}
+                  <Text style={styles.sshRailButtonText} numberOfLines={1}>
+                    {candidate}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
         <View style={styles.sshRailActions}>
           <Pressable accessibilityRole="button" style={styles.sshRailButton} onPress={reconnect}>
             <RefreshCcw size={15} color={theme.colors.text} />
@@ -5132,16 +5353,20 @@ function EmbeddedSshModal({
           </Pressable>
           <Pressable accessibilityRole="button" style={styles.sshRailButton} onPress={beginEditing}>
             <Settings2 size={15} color={theme.colors.text} />
-            <Text style={styles.sshRailButtonText}>Connection</Text>
+            <Text style={styles.sshRailButtonText}>Manual setup</Text>
           </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            style={[styles.sshRailButton, styles.sshRailButtonDanger]}
-            onPress={forgetProfile}
-          >
-            <Trash2 size={15} color={theme.colors.danger} />
-            <Text style={[styles.sshRailButtonText, styles.sshRailButtonTextDanger]}>Forget</Text>
-          </Pressable>
+          {manualProfile ? (
+            <Pressable
+              accessibilityRole="button"
+              style={[styles.sshRailButton, styles.sshRailButtonDanger]}
+              onPress={forgetProfile}
+            >
+              <Trash2 size={15} color={theme.colors.danger} />
+              <Text style={[styles.sshRailButtonText, styles.sshRailButtonTextDanger]}>
+                Forget manual profile
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
       <View style={styles.sshTerminalFrame}>
@@ -5154,6 +5379,9 @@ function EmbeddedSshModal({
           port={profile.port}
           password={profile.authMethod === "password" ? profile.password : undefined}
           privateKey={profile.authMethod === "private-key" ? profile.privateKey : undefined}
+          identityId={
+            profile.authMethod === "managed-key" ? profile.identityId : undefined
+          }
           connectionKey={`${profileKey}:${connectionGeneration}`}
           autoFocus={Platform.OS === "ios" && Platform.isPad && !visionControls}
           colorScheme={theme.dark ? "dark" : "light"}
@@ -5164,7 +5392,7 @@ function EmbeddedSshModal({
           }}
           onHostKeyPrompt={handleHostKeyPrompt}
           onExit={({ nativeEvent }) => {
-            setConnectionState("disconnected");
+            setConnectionState((state) => (state === "failed" ? state : "disconnected"));
             setConnectionMessage(nativeEvent.reason || "SSH session ended");
           }}
         />

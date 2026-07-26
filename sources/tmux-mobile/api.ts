@@ -42,6 +42,23 @@ export interface WindowAudioSummaryResponse {
   voice?: string;
 }
 
+export interface AuthorizeSshInput {
+  publicKey: string;
+  deviceId: string;
+  deviceLabel?: string;
+}
+
+export interface AuthorizeSshResponse {
+  ok: true;
+  authorized: true;
+  installed: boolean;
+  fingerprint: string;
+  host: string;
+  sshHosts: string[];
+  user: string;
+  port: number;
+}
+
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const bytes = toByteArray(base64);
   const buffer = new ArrayBuffer(bytes.byteLength);
@@ -185,6 +202,17 @@ export class TmuxMobileApi {
 
   commandCenter(machineId?: string): Promise<CommandCenterResponse> {
     return this.request("/api/command-center", { machineId });
+  }
+
+  authorizeSsh(
+    machineId: string,
+    input: AuthorizeSshInput,
+  ): Promise<AuthorizeSshResponse> {
+    return this.request("/api/ssh/authorize", {
+      method: "POST",
+      machineId,
+      body: input,
+    });
   }
 
   cardStars(): Promise<CardStarsResponse> {

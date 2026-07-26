@@ -6,6 +6,7 @@ struct BlinkTerminalConfiguration: Equatable {
   var port = 22
   var password = ""
   var privateKey = ""
+  var identityId = ""
   var command = ""
   var connectionKey = ""
 
