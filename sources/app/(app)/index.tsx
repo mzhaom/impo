@@ -51,8 +51,6 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
-  ChevronDown,
-  ChevronUp,
   CheckCircle,
   Circle,
   CloudDownload,
@@ -140,11 +138,7 @@ import {
   type CommandCenterShortcutEvent,
 } from "@/tmux-mobile/command-center-shortcuts";
 import { LegacyIPadShortcutCapture } from "@/tmux-mobile/legacy-ipad-shortcut-capture";
-import {
-  nextExpandedSessionKey,
-  sessionCardSummary,
-  shouldUseCompactSessionCards,
-} from "@/tmux-mobile/session-card";
+import { sessionCardSummary } from "@/tmux-mobile/session-card";
 import { useOtaUpdates, type OtaUpdateController, type OtaUpdateNotice } from "@/tmux-mobile/updates";
 import {
   normalizeSpokenControllerUrl,
@@ -694,7 +688,6 @@ function CommandCenterScreen() {
   const [pinsVisible, setPinsVisible] = React.useState(false);
   const [settingsVisible, setSettingsVisible] = React.useState(false);
   const [selectedAgent, setSelectedAgent] = React.useState<AgentSession | null>(null);
-  const [expandedAgentKey, setExpandedAgentKey] = React.useState<string | null>(null);
   const [machineChipReadLoaded, setMachineChipReadLoaded] = React.useState(false);
   const [machineChipReadAt, setMachineChipReadAt] = React.useState<number | null>(null);
   const appState = React.useRef(AppState.currentState);
@@ -711,10 +704,6 @@ function CommandCenterScreen() {
     visionControlsPreference,
     NATIVE_VISION_CONTROLS_DETECTED,
   );
-  const useCompactSessionCards = shouldUseCompactSessionCards({
-    isPad: Platform.OS === "ios" && Platform.isPad,
-    isVision: visionControlsEnabled,
-  });
 
   React.useEffect(() => {
     let mounted = true;
@@ -808,15 +797,6 @@ function CommandCenterScreen() {
       ...unstarredAgents.sort(compareRecentActivity),
     ];
   }, [machineFilter, rawAgents, stars]);
-
-  React.useEffect(() => {
-    if (
-      expandedAgentKey &&
-      !agents.some((agent) => agentCardKey(agent) === expandedAgentKey)
-    ) {
-      setExpandedAgentKey(null);
-    }
-  }, [agents, expandedAgentKey]);
 
   const toggleStar = React.useCallback(
     (agent: AgentSession) => {
@@ -1446,9 +1426,6 @@ function CommandCenterScreen() {
             animated: true,
           });
         }}
-        extraData={
-          useCompactSessionCards ? expandedAgentKey : "all-cards-expanded"
-        }
         style={styles.listViewport}
         contentContainerStyle={[
           styles.listContent,
@@ -1483,15 +1460,8 @@ function CommandCenterScreen() {
               agent={item}
               starred={starred}
               selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
-              collapsible={useCompactSessionCards}
-              expanded={!useCompactSessionCards || expandedAgentKey === key}
               onToggleStar={() => toggleStar(item)}
               onSelect={selectAgent}
-              onToggleExpanded={() => {
-                if (!useCompactSessionCards) return;
-                setExpandedAgentKey((current) => nextExpandedSessionKey(current, key));
-                void Haptics.selectionAsync();
-              }}
               onSend={() => {
                 selectAgent();
                 setSendTarget(item);
@@ -2107,11 +2077,8 @@ function AgentCard({
   agent,
   starred,
   selected,
-  collapsible,
-  expanded,
   onToggleStar,
   onSelect,
-  onToggleExpanded,
   onSend,
   onRename,
   onDelete,
@@ -2125,11 +2092,8 @@ function AgentCard({
   agent: AgentSession;
   starred: boolean;
   selected: boolean;
-  collapsible: boolean;
-  expanded: boolean;
   onToggleStar: () => void;
   onSelect: () => void;
-  onToggleExpanded: () => void;
   onSend: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -2147,8 +2111,6 @@ function AgentCard({
   const running = status === "running";
   const summary = sessionCardSummary(agent);
   const activityLabel = relativeTimeLabel(summary.lastActivityAt) || "No activity";
-  const compactStatusLabel =
-    running ? "RUN" : status === "waiting" ? "WAIT" : status === "idle" ? "IDLE" : "?";
   const statusStyle =
     running
       ? styles.statusRunning
@@ -2162,7 +2124,6 @@ function AgentCard({
     <View
       style={[
         styles.card,
-        !expanded ? styles.cardCompact : null,
         running ? styles.cardRunning : null,
         selected ? styles.cardSelected : null,
       ]}
@@ -2174,13 +2135,12 @@ function AgentCard({
         style={[
           styles.starButton,
           starred ? styles.starButtonActive : null,
-          !expanded ? styles.starButtonCompact : null,
         ]}
         hitSlop={12}
         onPress={onToggleStar}
       >
         <Star
-          size={expanded ? 18 : 16}
+          size={18}
           color={starred ? theme.colors.warning : theme.colors.textMuted}
           fill={starred ? theme.colors.warning : "transparent"}
         />
@@ -2192,172 +2152,113 @@ function AgentCard({
         }. Directory ${summary.directory || "unknown"}. Machine ${
           summary.machineName || "unknown"
         }. Agent ${agent.kind || "unknown"}. Status ${status}. Last activity ${activityLabel}.`}
-        accessibilityHint={
-          collapsible
-            ? expanded
-              ? "Hide session details"
-              : "Show session details"
-            : "Select session"
-        }
-        accessibilityState={
-          collapsible ? { expanded, selected } : { selected }
-        }
+        accessibilityHint="Select session"
+        accessibilityState={{ selected }}
         style={({ pressed }) => [
-          expanded ? styles.cardExpandedSummary : styles.cardCompactSummary,
+          styles.cardSummary,
           pressed ? styles.cardSummaryPressed : null,
         ]}
-        onPress={() => {
-          onSelect();
-          if (collapsible) onToggleExpanded();
-        }}
+        onPress={onSelect}
       >
-        {expanded ? (
-          <View style={styles.cardHeader}>
-            <View style={styles.agentAvatar}>
-              {icon ? (
-                <Image source={icon} style={styles.agentIcon} resizeMode="contain" />
-              ) : (
-                <Terminal size={18} color={theme.colors.text} />
-              )}
-            </View>
-            <View style={styles.cardTitleBlock}>
-              <View style={styles.cardTitleRow}>
-                <Text style={styles.cardTitle} numberOfLines={1}>
-                  {agentTitle(agent)}
-                </Text>
-                {agent.sessionName ? (
-                  <Text style={styles.sessionPill} numberOfLines={1}>
-                    {agent.sessionName}
-                  </Text>
-                ) : null}
-              </View>
-              <Text style={styles.cardMeta} numberOfLines={1}>
-                {agent.machineHostname || agentMachineKey(agent)} · {agent.kind || "agent"} ·{" "}
-                {agent.mux || "tmux"}
-              </Text>
-            </View>
-            {collapsible ? (
-              <ChevronUp size={18} color={theme.colors.textMuted} />
-            ) : null}
+        <View style={styles.cardHeader}>
+          <View style={styles.agentAvatar}>
+            {icon ? (
+              <Image source={icon} style={styles.agentIcon} resizeMode="contain" />
+            ) : (
+              <Terminal size={18} color={theme.colors.text} />
+            )}
           </View>
-        ) : (
-          <>
-            <View style={styles.compactCardTopRow}>
-              <Text style={styles.compactFieldLabel}>Window</Text>
-              <Text style={styles.compactWindowName} numberOfLines={1}>
-                {summary.windowName}
+          <View style={styles.cardTitleBlock}>
+            <View style={styles.cardTitleRow}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {agentTitle(agent)}
               </Text>
-              <View style={[styles.statusDot, styles.compactStatusDot, statusStyle]} />
-              <Text style={styles.compactStatusText} numberOfLines={1}>
-                {compactStatusLabel}
-              </Text>
-              <Text
-                style={styles.compactActivityTime}
-                accessibilityLabel={exactTimeLabel(summary.lastActivityAt)}
-                numberOfLines={1}
-              >
-                {activityLabel}
-              </Text>
-              <ChevronDown size={17} color={theme.colors.textMuted} />
-            </View>
-            <View style={styles.compactCardMetaRow}>
-              <Text style={styles.compactFieldLabel}>Session</Text>
-              <Text style={styles.compactSessionName} numberOfLines={1}>
-                {summary.sessionName || "—"}
-              </Text>
-              <Text style={styles.compactMetaDivider}>·</Text>
-              <Text style={styles.compactMachineName} numberOfLines={1}>
-                {summary.machineName} · {agent.kind || "agent"}
-              </Text>
-            </View>
-            <View style={styles.compactCardDirectoryRow}>
-              <Text style={styles.compactFieldLabel}>Dir</Text>
-              <Text
-                style={styles.compactDirectory}
-                numberOfLines={1}
-                ellipsizeMode="middle"
-              >
-                {summary.directory || "—"}
-              </Text>
-            </View>
-          </>
-        )}
-      </Pressable>
-      {expanded ? (
-        <View style={styles.cardBody}>
-          <View style={styles.statusRow}>
-            <View style={[styles.statusDot, statusStyle]} />
-            <Text style={styles.statusText}>{status}</Text>
-            <Text style={styles.statusDivider}>·</Text>
-            <Text style={styles.statusText}>{agent.turnCount || 0} turns</Text>
-            {agent.cwd ? (
-              <>
-                <Text style={styles.statusDivider}>·</Text>
-                <Text style={styles.cwdText} numberOfLines={1}>
-                  {agent.cwd}
+              {agent.sessionName ? (
+                <Text style={styles.sessionPill} numberOfLines={1}>
+                  {agent.sessionName}
                 </Text>
-              </>
-            ) : null}
-          </View>
-          {agent.lastUserText ? (
-            <View>
-              <CardSectionHeader label="Last prompt" timestamp={agent.lastUserAt} />
-              <Text style={styles.promptText} numberOfLines={2}>
-                {agent.lastUserText}
-              </Text>
+              ) : null}
             </View>
-          ) : null}
-          {agent.lastAssistantText ? (
-            <View style={styles.responseBlock}>
-              <CardSectionHeader label="Last response" timestamp={agent.lastAssistantAt} />
-              <LinkedPathText
-                text={agent.lastAssistantText}
-                style={styles.answerText}
-                numberOfLines={3}
-                onOpenPath={onOpenFile}
-              />
-              <View style={styles.responseActions}>
-                <ActionButton
-                  icon={<Maximize2 size={15} color={theme.colors.text} />}
-                  label="Open response"
-                  onPress={onViewResponse}
-                />
-                <ActionButton
-                  icon={
-                    responseCopied ? (
-                      <Check size={15} color={theme.colors.success} />
-                    ) : (
-                      <Copy size={15} color={theme.colors.text} />
-                    )
-                  }
-                  label="Copy response"
-                  onPress={onCopyResponse}
-                />
-              </View>
-            </View>
-          ) : null}
-          {!agent.lastUserText && !agent.lastAssistantText ? (
-            <Text style={styles.answerText} numberOfLines={2}>
-              {agentSubtitle(agent) || "No transcript yet."}
+            <Text style={styles.cardMeta} numberOfLines={1}>
+              {agent.machineHostname || agentMachineKey(agent)} · {agent.kind || "agent"} ·{" "}
+              {agent.mux || "tmux"}
             </Text>
-          ) : null}
-          <View style={styles.cardActions}>
-            <ActionButton icon={<Send size={15} color={theme.colors.text} />} label="Send" onPress={onSend} />
-            <ActionButton icon={<Eye size={15} color={theme.colors.text} />} label="View" onPress={onView} />
-            <ActionButton
-              icon={<MessageSquareText size={15} color={theme.colors.text} />}
-              label="Transcript"
-              onPress={onTranscript}
-            />
-            <ActionButton icon={<Edit3 size={15} color={theme.colors.text} />} label="Rename" onPress={onRename} />
-            <ActionButton
-              icon={<Trash2 size={15} color={theme.colors.danger} />}
-              label="Delete session"
-              onPress={onDelete}
-            />
           </View>
         </View>
-      ) : null}
+      </Pressable>
+      <View style={styles.cardBody}>
+        <View style={styles.statusRow}>
+          <View style={[styles.statusDot, statusStyle]} />
+          <Text style={styles.statusText}>{status}</Text>
+          <Text style={styles.statusDivider}>·</Text>
+          <Text style={styles.statusText}>{agent.turnCount || 0} turns</Text>
+          {agent.cwd ? (
+            <>
+              <Text style={styles.statusDivider}>·</Text>
+              <Text style={styles.cwdText} numberOfLines={1}>
+                {agent.cwd}
+              </Text>
+            </>
+          ) : null}
+        </View>
+        {agent.lastUserText ? (
+          <View>
+            <CardSectionHeader label="Last prompt" timestamp={agent.lastUserAt} />
+            <Text style={styles.promptText} numberOfLines={2}>
+              {agent.lastUserText}
+            </Text>
+          </View>
+        ) : null}
+        {agent.lastAssistantText ? (
+          <View style={styles.responseBlock}>
+            <CardSectionHeader label="Last response" timestamp={agent.lastAssistantAt} />
+            <LinkedPathText
+              text={agent.lastAssistantText}
+              style={styles.answerText}
+              numberOfLines={3}
+              onOpenPath={onOpenFile}
+            />
+            <View style={styles.responseActions}>
+              <ActionButton
+                icon={<Maximize2 size={15} color={theme.colors.text} />}
+                label="Open response"
+                onPress={onViewResponse}
+              />
+              <ActionButton
+                icon={
+                  responseCopied ? (
+                    <Check size={15} color={theme.colors.success} />
+                  ) : (
+                    <Copy size={15} color={theme.colors.text} />
+                  )
+                }
+                label="Copy response"
+                onPress={onCopyResponse}
+              />
+            </View>
+          </View>
+        ) : null}
+        {!agent.lastUserText && !agent.lastAssistantText ? (
+          <Text style={styles.answerText} numberOfLines={2}>
+            {agentSubtitle(agent) || "No transcript yet."}
+          </Text>
+        ) : null}
+        <View style={styles.cardActions}>
+          <ActionButton icon={<Send size={15} color={theme.colors.text} />} label="Send" onPress={onSend} />
+          <ActionButton icon={<Eye size={15} color={theme.colors.text} />} label="View" onPress={onView} />
+          <ActionButton
+            icon={<MessageSquareText size={15} color={theme.colors.text} />}
+            label="Transcript"
+            onPress={onTranscript}
+          />
+          <ActionButton icon={<Edit3 size={15} color={theme.colors.text} />} label="Rename" onPress={onRename} />
+          <ActionButton
+            icon={<Trash2 size={15} color={theme.colors.danger} />}
+            label="Delete session"
+            onPress={onDelete}
+          />
+        </View>
+      </View>
     </View>
   );
 }
@@ -6988,10 +6889,6 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
 	    padding: layout.cardPadding,
 	    gap: 10,
 	  },
-  cardCompact: {
-    paddingVertical: 10,
-    gap: 0,
-  },
 	  cardRunning: {
 	    borderColor: theme.dark ? "rgba(90, 150, 204, 0.42)" : "rgba(53, 89, 122, 0.42)",
 	  },
@@ -7031,112 +6928,17 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     borderWidth: 1,
     borderColor: theme.colors.border,
   },
-  starButtonCompact: {
-    top: 12,
-    width: 28,
-    height: 28,
-    borderWidth: 0,
-    borderColor: "transparent",
-    backgroundColor: "transparent",
-  },
   starButtonActive: {
     backgroundColor: theme.dark ? "#3a2f16" : "#fff7e0",
     borderColor: theme.colors.warning,
   },
-  cardCompactSummary: {
-    minWidth: 0,
-    minHeight: 68,
-    paddingLeft: 42,
-    justifyContent: "center",
-    gap: 4,
-  },
-  cardExpandedSummary: {
+  cardSummary: {
     minWidth: 0,
     minHeight: 44,
     justifyContent: "center",
   },
   cardSummaryPressed: {
     opacity: 0.68,
-  },
-  compactCardTopRow: {
-    minWidth: 0,
-    minHeight: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  compactCardMetaRow: {
-    minWidth: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  compactCardDirectoryRow: {
-    minWidth: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  compactStatusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: theme.radii.full,
-    flexShrink: 0,
-  },
-  compactFieldLabel: {
-    ...theme.typography.meta,
-    width: 52,
-    flexShrink: 0,
-    color: theme.colors.textMuted,
-    fontFamily: "Lato_700Bold",
-    fontSize: 10,
-    lineHeight: 14,
-    letterSpacing: 0.45,
-    textTransform: "uppercase",
-  },
-  compactWindowName: {
-    ...theme.typography.section,
-    flex: 1,
-    minWidth: 0,
-    color: theme.colors.text,
-  },
-  compactActivityTime: {
-    ...theme.typography.meta,
-    flexShrink: 0,
-    color: theme.colors.textMuted,
-  },
-  compactStatusText: {
-    ...theme.typography.meta,
-    flexShrink: 0,
-    color: theme.colors.textMuted,
-    fontSize: 9,
-    lineHeight: 12,
-    letterSpacing: 0.35,
-  },
-  compactSessionName: {
-    ...theme.typography.meta,
-    flex: 1,
-    minWidth: 0,
-    color: theme.colors.text,
-  },
-  compactMetaDivider: {
-    ...theme.typography.meta,
-    flexShrink: 0,
-    color: theme.colors.border,
-  },
-  compactMachineName: {
-    ...theme.typography.meta,
-    maxWidth: "42%",
-    flexShrink: 1,
-    color: theme.colors.textMuted,
-  },
-  compactDirectory: {
-    ...theme.typography.mono,
-    flex: 1,
-    minWidth: 0,
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    lineHeight: 16,
   },
   cardHeader: {
     flexDirection: "row",

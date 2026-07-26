@@ -9,11 +9,6 @@ export type SessionCardSummary = {
   lastActivityAt: string | null;
 };
 
-export type SessionCardDeviceContext = {
-  isPad: boolean;
-  isVision: boolean;
-};
-
 function cleanLabel(value: string | null | undefined): string {
   return String(value || "").trim();
 }
@@ -47,18 +42,4 @@ export function sessionCardSummary(agent: AgentSession): SessionCardSummary {
       agent.lastUserAt,
     ]),
   };
-}
-
-export function nextExpandedSessionKey(
-  currentKey: string | null,
-  pressedKey: string,
-): string | null {
-  return currentKey === pressedKey ? null : pressedKey;
-}
-
-export function shouldUseCompactSessionCards({
-  isPad,
-  isVision,
-}: SessionCardDeviceContext): boolean {
-  return !isPad && !isVision;
 }
