@@ -20,12 +20,12 @@ describe("composerSnippetLabel", () => {
     const goal = FALLBACK_SNIPPETS.find((item) => item.text.trim() === "/goal");
 
     expect(goal?.text).toBe("/goal ");
-    expect(composerSnippetLabel(goal?.text || "")).toBe("/GOAL");
+    expect(composerSnippetLabel(goal?.text || "")).toBe("/goal");
   });
 
   it("recognizes the goal command without relying on whitespace or case", () => {
-    expect(composerSnippetLabel("/goal")).toBe("/GOAL");
-    expect(composerSnippetLabel("/GOAL ")).toBe("/GOAL");
+    expect(composerSnippetLabel("/goal")).toBe("/goal");
+    expect(composerSnippetLabel("/GOAL ")).toBe("/goal");
   });
 
   it("keeps all other snippet labels unchanged", () => {

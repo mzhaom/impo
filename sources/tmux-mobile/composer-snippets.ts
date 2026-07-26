@@ -11,7 +11,7 @@ export const FALLBACK_SNIPPETS: UserSnippetItem[] = [
 ];
 
 export function composerSnippetLabel(text: string): string {
-  return text.trim().toLowerCase() === GOAL_COMMAND ? "/GOAL" : text;
+  return text.trim().toLowerCase() === GOAL_COMMAND ? GOAL_COMMAND : text;
 }
 
 export function prioritizeGoalSnippet(
