@@ -8,7 +8,7 @@ export default {
   expo: {
     name: "CJMUX",
     slug: "tmux-mobile-mobile",
-    version: "0.1.0",
+    version: "1.0",
     runtimeVersion,
     updates: {
       url: "https://u.expo.dev/649f50ed-e509-4fbc-9d23-a8c9080ba635",

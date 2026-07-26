@@ -360,7 +360,7 @@ extension BlinkTerminalSurface: WKScriptMessageHandler {
     didReceive message: WKScriptMessage
   ) {
     guard
-      message.name == "interOp",
+      message.name == "interOp" || message.name == "_kb",
       message.frameInfo.isMainFrame,
       message.frameInfo.securityOrigin.protocol == "file",
       webView.url?.standardizedFileURL == terminalURL
@@ -373,6 +373,20 @@ extension BlinkTerminalSurface: WKScriptMessageHandler {
     else {
       return
     }
+
+    // Blink's bundled keyboard bridge sends both software-keyboard and
+    // hardware-keyboard output through the `_kb` handler. A plain WKWebView can
+    // become the real first responder when its terminal canvas is tapped, so
+    // UIKeyInput.insertText on this wrapper is not guaranteed to receive the
+    // keystroke. Forward the bridge's finalized output (including composed IME
+    // text) to the SSH PTY as Blink does in its own terminal view.
+    if message.name == "_kb" {
+      if operation == "out", let string = body["data"] as? String {
+        send(string)
+      }
+      return
+    }
+
     let data = body["data"] as? [String: Any] ?? [:]
 
     switch operation {
