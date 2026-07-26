@@ -77,7 +77,6 @@ import {
   MessageSquareText,
   Mic,
   MicOff,
-  Minimize2,
   MoreVertical,
   Moon,
   Pin,
@@ -3564,7 +3563,6 @@ function PaneComposer({
   onShortcut,
   onClear,
   onRetry,
-  onExitFullscreen,
   onCloseTerminal,
   following = false,
   onToggleFollow,
@@ -3599,7 +3597,6 @@ function PaneComposer({
   onShortcut?: (value: string) => void;
   onClear?: () => void;
   onRetry?: () => void;
-  onExitFullscreen?: () => void;
   onCloseTerminal?: () => void;
   following?: boolean;
   onToggleFollow?: () => void;
@@ -3832,17 +3829,6 @@ function PaneComposer({
       </Pressable>
     ) : null;
 
-  const exitFullscreenButton =
-    expanded && onExitFullscreen ? (
-      <Pressable
-        accessibilityLabel="Exit fullscreen terminal"
-        style={styles.paneComposerFullscreenExitButton}
-        onPress={onExitFullscreen}
-      >
-        <Minimize2 size={17} color={theme.colors.text} />
-      </Pressable>
-    ) : null;
-
   const closeTerminalButton =
     expanded && onCloseTerminal ? (
       <Pressable
@@ -4029,20 +4015,8 @@ function PaneComposer({
         </View>
         {visionMoreVisible ? (
           <View style={styles.visionMorePanel}>
-            {onExitFullscreen || onCloseTerminal || followButton ? (
+            {onCloseTerminal || followButton ? (
               <View style={styles.visionMoreActionRow}>
-                {onExitFullscreen ? (
-                  <Pressable
-                    accessibilityLabel="Exit fullscreen terminal"
-                    style={styles.visionComposerSquareButton}
-                    onPress={() => {
-                      setVisionMoreVisible(false);
-                      onExitFullscreen();
-                    }}
-                  >
-                    <Minimize2 size={21} color={theme.colors.text} />
-                  </Pressable>
-                ) : null}
                 {onCloseTerminal ? (
                   <Pressable
                     accessibilityLabel="Close terminal"
@@ -4194,7 +4168,6 @@ function PaneComposer({
             {input}
             <View style={styles.paneComposerInlineActions}>
               {followButton}
-              {exitFullscreenButton}
               {closeTerminalButton}
               {uploadButton}
               {keysButton}
@@ -5629,7 +5602,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   }, [activePaneId, api, refreshCapture, target, terminalAutoRefresh]);
 
   const terminalNodes = React.useMemo(() => renderAnsiText(terminalText), [terminalText]);
-  const terminalShouldFollow = Platform.OS === "ios" ? terminalFollow : terminalAutoRefresh;
+  const terminalShouldFollow = terminalFollow;
   const scrollPaneTailToEnd = React.useCallback((animated = false) => {
     requestAnimationFrame(() => {
       paneTailScrollRef.current?.scrollToEnd({ animated });
@@ -5837,11 +5810,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     [afterTerminalSend, sendKey, sendText, sendTerminalInput, target, terminalInput],
   );
 
-  const exitTerminalFullscreen = React.useCallback(() => {
-    Keyboard.dismiss();
-    setTerminalFullscreen(false);
-  }, []);
-
   const closeTerminalModal = React.useCallback(() => {
     Keyboard.dismiss();
     setTerminalFullscreen(false);
@@ -5897,17 +5865,10 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
             }}
           />
           <ActionButton
-            icon={
-              terminalFullscreen ? (
-                <Minimize2 size={15} color={theme.colors.accent} />
-              ) : (
-                <Maximize2 size={15} color={theme.colors.text} />
-              )
-            }
-            label={terminalFullscreen ? "Exit fullscreen terminal" : "Fullscreen terminal"}
-            active={terminalFullscreen}
+            icon={<Maximize2 size={15} color={theme.colors.text} />}
+            label="Fullscreen terminal"
             onPress={() => {
-              setTerminalFullscreen((value) => !value);
+              setTerminalFullscreen(true);
             }}
           />
           <ActionButton
@@ -5928,7 +5889,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           if (terminalShouldFollow) scrollPaneTailToEnd(false);
         }}
         onScrollBeginDrag={() => {
-          if (Platform.OS === "ios") setTerminalFollow(false);
+          setTerminalFollow(false);
         }}
         keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         keyboardShouldPersistTaps="handled"
@@ -5962,10 +5923,9 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           terminalInputRef.current = "";
         }}
         onRetry={() => sendTerminalInput({ submit: true })}
-        onExitFullscreen={terminalFullscreen ? exitTerminalFullscreen : undefined}
         onCloseTerminal={terminalFullscreen ? closeTerminalModal : undefined}
         following={terminalFollow}
-        onToggleFollow={terminalFullscreen && Platform.OS === "ios" ? toggleTerminalFollow : undefined}
+        onToggleFollow={terminalFullscreen ? toggleTerminalFollow : undefined}
         recognizing={terminalVoiceInput.active}
         voiceRecording={terminalVoiceInput.recording}
         voiceTranscribing={terminalVoiceInput.transcribing}
@@ -7276,10 +7236,10 @@ function SheetModal({
   );
 
   const sheetIsWide = windowWidth >= 760;
-  const keyboardAffectsSheet = !sheetIsWide || !tall;
+  const fullscreenActive = Boolean(fullscreen || (fullscreenOnWide && sheetIsWide));
+  const keyboardAffectsSheet = fullscreenActive || !sheetIsWide || !tall;
   const keyboardOffset = visible && keyboardAffectsSheet ? keyboardHeight : 0;
   const keyboardGap = 0;
-  const fullscreenActive = Boolean(fullscreen || (fullscreenOnWide && sheetIsWide));
   const availableSheetHeight = Math.max(
     220,
     windowHeight - keyboardOffset - keyboardGap - (fullscreenActive ? 0 : insets.top + 14),

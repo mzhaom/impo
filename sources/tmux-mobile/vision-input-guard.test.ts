@@ -129,7 +129,7 @@ describe("Terminal ANSI rendering", () => {
 });
 
 describe("Terminal fullscreen behavior", () => {
-  it("opens windowed and keeps a one-tap close action in fullscreen", () => {
+  it("opens windowed and makes fullscreen a one-way mode until the terminal closes", () => {
     expect(appSource).toContain(
       "const [terminalFullscreen, setTerminalFullscreen] = React.useState(false);",
     );
@@ -139,8 +139,21 @@ describe("Terminal fullscreen behavior", () => {
     expect(appSource).toContain(
       "onCloseTerminal={terminalFullscreen ? closeTerminalModal : undefined}",
     );
+    expect(appSource).not.toContain("onExitFullscreen");
+    expect(appSource).not.toContain('accessibilityLabel="Exit fullscreen terminal"');
     expect(appSource).toContain('accessibilityLabel="Close terminal"');
     expect(appSource).toContain("onClose={closeTerminalModal}");
+    expect(appSource).toContain("setTerminalFullscreen(true);");
     expect(appSource).toContain("setTerminalFullscreen(false);");
+  });
+
+  it("keeps follow controls in fullscreen and lifts fullscreen sheets above the keyboard", () => {
+    expect(appSource).toContain(
+      "onToggleFollow={terminalFullscreen ? toggleTerminalFollow : undefined}",
+    );
+    expect(appSource).toContain("const terminalShouldFollow = terminalFollow;");
+    expect(appSource).toContain(
+      "const keyboardAffectsSheet = fullscreenActive || !sheetIsWide || !tall;",
+    );
   });
 });
