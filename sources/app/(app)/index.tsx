@@ -4193,6 +4193,7 @@ function PaneComposer({
           <View style={styles.paneComposerInputShell}>
             {input}
             <View style={styles.paneComposerInlineActions}>
+              {followButton}
               {exitFullscreenButton}
               {closeTerminalButton}
               {uploadButton}
@@ -4200,7 +4201,6 @@ function PaneComposer({
               {sendButton}
             </View>
           </View>
-          {followButton}
           {reserveStatusSpace || standardStatus || error ? (
             <Text style={styles.paneComposerStatus} numberOfLines={1}>
               {standardStatus || error || ""}
