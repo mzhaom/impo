@@ -3,18 +3,15 @@ import type { UserSnippetItem } from "@/tmux-mobile/types";
 const GOAL_COMMAND = "/goal";
 
 export const FALLBACK_SNIPPETS: UserSnippetItem[] = [
-  { text: "yes" },
-  { text: "continue" },
   { text: "/clear" },
   { text: "/model" },
   { text: "/goal " },
+  { text: "/rename " },
   { text: "/btw " },
-  { text: "claude" },
-  { text: "codex" },
 ];
 
 export function composerSnippetLabel(text: string): string {
-  return text.trim().toLowerCase() === GOAL_COMMAND ? "GOAL" : text;
+  return text.trim().toLowerCase() === GOAL_COMMAND ? "/GOAL" : text;
 }
 
 export function prioritizeGoalSnippet(

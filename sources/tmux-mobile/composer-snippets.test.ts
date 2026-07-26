@@ -8,27 +8,24 @@ import {
 describe("composerSnippetLabel", () => {
   it("keeps the established default order and includes the goal slash command", () => {
     expect(FALLBACK_SNIPPETS.map((item) => item.text)).toEqual([
-      "yes",
-      "continue",
       "/clear",
       "/model",
       "/goal ",
+      "/rename ",
       "/btw ",
-      "claude",
-      "codex",
     ]);
   });
 
-  it("shows the goal slash command as GOAL without changing its inserted text", () => {
+  it("shows the goal slash command with its slash without changing its inserted text", () => {
     const goal = FALLBACK_SNIPPETS.find((item) => item.text.trim() === "/goal");
 
     expect(goal?.text).toBe("/goal ");
-    expect(composerSnippetLabel(goal?.text || "")).toBe("GOAL");
+    expect(composerSnippetLabel(goal?.text || "")).toBe("/GOAL");
   });
 
   it("recognizes the goal command without relying on whitespace or case", () => {
-    expect(composerSnippetLabel("/goal")).toBe("GOAL");
-    expect(composerSnippetLabel("/GOAL ")).toBe("GOAL");
+    expect(composerSnippetLabel("/goal")).toBe("/GOAL");
+    expect(composerSnippetLabel("/GOAL ")).toBe("/GOAL");
   });
 
   it("keeps all other snippet labels unchanged", () => {
