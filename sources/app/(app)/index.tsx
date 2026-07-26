@@ -27,6 +27,7 @@ import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
+import * as SecureStore from "expo-secure-store";
 import {
   setAudioModeAsync,
   useAudioPlayer,
@@ -39,6 +40,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown, { type RenderRules } from "react-native-markdown-display";
 import { toByteArray } from "base64-js";
 import CJMUXVisionDevice from "../../../modules/cjmux-vision-device";
+import {
+  CJMUXBlinkTerminal,
+  hasNativeCJMUXBlinkTerminal,
+  type BlinkTerminalHandle,
+  type BlinkTerminalState,
+} from "../../../modules/cjmux-blink-terminal";
 import {
   CJMUXKeyboardShortcutSurface,
   hasNativeCJMUXKeyboardShortcuts,
@@ -133,11 +140,13 @@ import {
   FALLBACK_SNIPPETS,
   prioritizeGoalSnippet,
 } from "@/tmux-mobile/composer-snippets";
+import { resolveStandardVoiceInputPresentation } from "@/tmux-mobile/voice-input-presentation";
 import {
   resolveCommandCenterShortcut,
   type CommandCenterShortcutEvent,
 } from "@/tmux-mobile/command-center-shortcuts";
 import { LegacyIPadShortcutCapture } from "@/tmux-mobile/legacy-ipad-shortcut-capture";
+import { isRecentActivity, relativeTimeLabel } from "@/tmux-mobile/relative-time";
 import { sessionCardSummary } from "@/tmux-mobile/session-card";
 import { useOtaUpdates, type OtaUpdateController, type OtaUpdateNotice } from "@/tmux-mobile/updates";
 import {
@@ -172,6 +181,7 @@ const EMPTY_AGENTS: AgentSession[] = [];
 const THEME_MODE_KEY = "tmux-mobile.theme-mode";
 const MACHINE_CHIP_READ_AT_KEY = "tmux-mobile.machine-chip-read-at";
 const MACHINE_CHIP_READ_GRACE_MS = 5_000;
+const RELATIVE_TIME_REFRESH_MS = 60_000;
 const CONTROLLER_BROWSER_HANDOFF_PATHS = new Set([
   "/pin",
   "/api/pin",
@@ -191,6 +201,67 @@ type MachineChipStats = {
   workingCount: number;
   unreadCount: number;
 };
+
+type SshAuthMethod = "password" | "private-key";
+
+type StoredSshProfile = {
+  version: 1;
+  host: string;
+  user: string;
+  port: number;
+  authMethod: SshAuthMethod;
+  password?: string;
+  privateKey?: string;
+};
+
+const SSH_PROFILE_KEY_PREFIX = "tmux-mobile.ssh-profile.v1";
+
+function stableStorageKeyPart(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function sshProfileStorageKey(controllerUrl: string, machineId: string): string {
+  return `${SSH_PROFILE_KEY_PREFIX}.${stableStorageKeyPart(
+    controllerUrl.trim().toLowerCase(),
+  )}.${stableStorageKeyPart(machineId)}`;
+}
+
+function readStoredSshProfile(value: string | null): StoredSshProfile | null {
+  if (!value) return null;
+  try {
+    const profile = JSON.parse(value) as Partial<StoredSshProfile>;
+    const port = Number(profile.port);
+    if (
+      profile.version !== 1 ||
+      !String(profile.host || "").trim() ||
+      !String(profile.user || "").trim() ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65535 ||
+      (profile.authMethod !== "password" && profile.authMethod !== "private-key")
+    ) {
+      return null;
+    }
+    if (profile.authMethod === "password" && !String(profile.password || "")) return null;
+    if (profile.authMethod === "private-key" && !String(profile.privateKey || "")) return null;
+    return {
+      version: 1,
+      host: String(profile.host).trim(),
+      user: String(profile.user).trim(),
+      port,
+      authMethod: profile.authMethod,
+      password: profile.authMethod === "password" ? String(profile.password) : undefined,
+      privateKey: profile.authMethod === "private-key" ? String(profile.privateKey) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
 
 type ResponsiveLayout = {
   width: number;
@@ -409,27 +480,6 @@ function exactTimeLabel(value: string | null | undefined): string {
     day: "numeric",
     year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
   })} ${time}`;
-}
-
-function relativeTimeLabel(value: string | null | undefined): string {
-  const ms = parseDateMs(value);
-  if (!ms) return "";
-  const diffMs = Date.now() - ms;
-  const future = diffMs < 0;
-  const seconds = Math.max(0, Math.round(Math.abs(diffMs) / 1000));
-  if (seconds < 45) return future ? "soon" : "now";
-  const units = [
-    ["d", 86400],
-    ["h", 3600],
-    ["m", 60],
-  ] as const;
-  for (const [label, size] of units) {
-    if (seconds >= size) {
-      const count = Math.floor(seconds / size);
-      return future ? `in ${count}${label}` : `${count}${label} ago`;
-    }
-  }
-  return future ? "in 1m" : "1m ago";
 }
 
 const PIN_SCOPE_LABELS: Record<string, string> = {
@@ -668,6 +718,7 @@ function CommandCenterScreen() {
   const [sendTarget, setSendTarget] = React.useState<AgentSession | null>(null);
   const [renameTarget, setRenameTarget] = React.useState<AgentSession | null>(null);
   const [viewTarget, setViewTarget] = React.useState<AgentSession | null>(null);
+  const [sshTarget, setSshTarget] = React.useState<AgentSession | null>(null);
   const [responseTarget, setResponseTarget] = React.useState<AgentSession | null>(null);
   const [fileTarget, setFileTarget] = React.useState<AgentFileTarget | null>(null);
   const [transcriptTarget, setTranscriptTarget] = React.useState<AgentSession | null>(null);
@@ -690,6 +741,7 @@ function CommandCenterScreen() {
   const [selectedAgent, setSelectedAgent] = React.useState<AgentSession | null>(null);
   const [machineChipReadLoaded, setMachineChipReadLoaded] = React.useState(false);
   const [machineChipReadAt, setMachineChipReadAt] = React.useState<number | null>(null);
+  const [relativeTimeTick, setRelativeTimeTick] = React.useState(0);
   const appState = React.useRef(AppState.currentState);
   const copyResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copiedResponseKey, setCopiedResponseKey] = React.useState("");
@@ -699,11 +751,16 @@ function CommandCenterScreen() {
     [windowHeight, windowWidth],
   );
   const styles = React.useMemo(() => createStyles(theme, layout), [layout, theme]);
+  const relativeTimeNow = Date.now();
   const otaUpdates = useOtaUpdates();
   const visionControlsEnabled = resolveVisionControls(
     visionControlsPreference,
     NATIVE_VISION_CONTROLS_DETECTED,
   );
+  const embeddedSshAvailable =
+    Platform.OS === "ios" &&
+    hasNativeCJMUXBlinkTerminal &&
+    !visionControlsEnabled;
 
   React.useEffect(() => {
     let mounted = true;
@@ -1004,6 +1061,7 @@ function CommandCenterScreen() {
     sendTarget ||
       renameTarget ||
       viewTarget ||
+      sshTarget ||
       responseTarget ||
       fileTarget ||
       transcriptTarget ||
@@ -1169,6 +1227,9 @@ function CommandCenterScreen() {
       if (!shortcut) return;
 
       if (shortcut.type === "escape") {
+        // A hardware Escape key belongs to the embedded terminal while it is
+        // active. The terminal sheet has an explicit close button.
+        if (sshTarget) return;
         if (fileTarget) setFileTarget(null);
         else if (transcriptTarget) setTranscriptTarget(null);
         else if (responseTarget) setResponseTarget(null);
@@ -1252,6 +1313,7 @@ function CommandCenterScreen() {
       responseTarget,
       sendTarget,
       settingsVisible,
+      sshTarget,
       startVisible,
       stopShortcutRead,
       transcriptTarget,
@@ -1263,6 +1325,8 @@ function CommandCenterScreen() {
     Platform.OS === "ios" && Platform.isPad && !visionControlsEnabled;
   const ipadShortcutMode: CJMUXKeyboardShortcutMode = !ipadShortcutEnabled
     ? "none"
+    : sshTarget
+      ? "none"
     : modalOpen
       ? "escape"
       : "all";
@@ -1293,10 +1357,18 @@ function CommandCenterScreen() {
   }, []);
 
   React.useEffect(() => {
+    const timer = setInterval(() => {
+      setRelativeTimeTick((tick) => tick + 1);
+    }, RELATIVE_TIME_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, []);
+
+  React.useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       const previousState = appState.current;
       appState.current = nextState;
       if ((previousState === "background" || previousState === "inactive") && nextState === "active") {
+        setRelativeTimeTick((tick) => tick + 1);
         queryClient.invalidateQueries({ queryKey: commandCenterKey }).catch(() => {});
         queryClient.invalidateQueries({ queryKey: cardStarsKey }).catch(() => {});
       }
@@ -1434,6 +1506,7 @@ function CommandCenterScreen() {
         ]}
         numColumns={layout.listColumns}
         columnWrapperStyle={layout.listColumns > 1 ? styles.cardColumnWrapper : undefined}
+        extraData={relativeTimeTick}
         refreshControl={
           <RefreshControl
             refreshing={commandCenter.isFetching}
@@ -1458,6 +1531,7 @@ function CommandCenterScreen() {
             <View style={styles.cardGridItem}>
             <AgentCard
               agent={item}
+              nowMs={relativeTimeNow}
               starred={starred}
               selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
               onToggleStar={() => toggleStar(item)}
@@ -1478,6 +1552,14 @@ function CommandCenterScreen() {
                 selectAgent();
                 setViewTarget(item);
               }}
+              onSsh={
+                embeddedSshAvailable
+                  ? () => {
+                      selectAgent();
+                      setSshTarget(item);
+                    }
+                  : undefined
+              }
               onViewResponse={() => {
                 selectAgent();
                 setResponseTarget(item);
@@ -1501,6 +1583,11 @@ function CommandCenterScreen() {
       <SendModal target={sendTarget} onClose={() => setSendTarget(null)} />
       <RenameModal target={renameTarget} onClose={() => setRenameTarget(null)} />
       <WindowViewModal target={viewTarget} onClose={() => setViewTarget(null)} />
+      <EmbeddedSshModal
+        target={sshTarget}
+        controllerUrl={auth.session.baseUrl || auth.baseUrl}
+        onClose={() => setSshTarget(null)}
+      />
       <ResponseModal
         target={responseTarget}
         copied={responseTarget ? copiedResponseKey === agentCardKey(responseTarget) : false}
@@ -2075,6 +2162,7 @@ function MarkdownImageBlock({
 
 function AgentCard({
   agent,
+  nowMs,
   starred,
   selected,
   onToggleStar,
@@ -2083,6 +2171,7 @@ function AgentCard({
   onRename,
   onDelete,
   onView,
+  onSsh,
   onViewResponse,
   onCopyResponse,
   onOpenFile,
@@ -2090,6 +2179,7 @@ function AgentCard({
   onTranscript,
 }: {
   agent: AgentSession;
+  nowMs: number;
   starred: boolean;
   selected: boolean;
   onToggleStar: () => void;
@@ -2098,6 +2188,7 @@ function AgentCard({
   onRename: () => void;
   onDelete: () => void;
   onView: () => void;
+  onSsh?: () => void;
   onViewResponse: () => void;
   onCopyResponse: () => void;
   onOpenFile: (path: string) => void;
@@ -2110,7 +2201,8 @@ function AgentCard({
   const status = agent.waitingForInput ? "waiting" : agent.status || agent.turn || "unverified";
   const running = status === "running";
   const summary = sessionCardSummary(agent);
-  const activityLabel = relativeTimeLabel(summary.lastActivityAt) || "No activity";
+  const activityLabel = relativeTimeLabel(summary.lastActivityAt, nowMs) || "No activity";
+  const recentActivity = isRecentActivity(summary.lastActivityAt, nowMs);
   const statusStyle =
     running
       ? styles.statusRunning
@@ -2179,10 +2271,24 @@ function AgentCard({
                 </Text>
               ) : null}
             </View>
-            <Text style={styles.cardMeta} numberOfLines={1}>
-              {agent.machineHostname || agentMachineKey(agent)} · {agent.kind || "agent"} ·{" "}
-              {agent.mux || "tmux"}
-            </Text>
+            <View style={styles.cardMetaRow}>
+              <Text style={styles.cardMeta} numberOfLines={1}>
+                {agent.machineHostname || agentMachineKey(agent)} · {agent.kind || "agent"} ·{" "}
+                {agent.mux || "tmux"}
+              </Text>
+              <Text
+                style={[
+                  styles.cardActivityTime,
+                  recentActivity ? styles.cardActivityTimeRecent : null,
+                ]}
+                accessibilityLabel={`${
+                  recentActivity ? "Recent activity" : "Last activity"
+                }, ${exactTimeLabel(summary.lastActivityAt) || activityLabel}`}
+                numberOfLines={1}
+              >
+                {activityLabel}
+              </Text>
+            </View>
           </View>
         </View>
       </Pressable>
@@ -2203,7 +2309,7 @@ function AgentCard({
         </View>
         {agent.lastUserText ? (
           <View>
-            <CardSectionHeader label="Last prompt" timestamp={agent.lastUserAt} />
+            <CardSectionHeader label="Last prompt" timestamp={agent.lastUserAt} nowMs={nowMs} />
             <Text style={styles.promptText} numberOfLines={2}>
               {agent.lastUserText}
             </Text>
@@ -2211,7 +2317,7 @@ function AgentCard({
         ) : null}
         {agent.lastAssistantText ? (
           <View style={styles.responseBlock}>
-            <CardSectionHeader label="Last response" timestamp={agent.lastAssistantAt} />
+            <CardSectionHeader label="Last response" timestamp={agent.lastAssistantAt} nowMs={nowMs} />
             <LinkedPathText
               text={agent.lastAssistantText}
               style={styles.answerText}
@@ -2245,7 +2351,20 @@ function AgentCard({
         ) : null}
         <View style={styles.cardActions}>
           <ActionButton icon={<Send size={15} color={theme.colors.text} />} label="Send" onPress={onSend} />
-          <ActionButton icon={<Eye size={15} color={theme.colors.text} />} label="View" onPress={onView} />
+          <ActionButton
+            icon={<Eye size={15} color={theme.colors.text} />}
+            label="Terminal"
+            showLabel
+            onPress={onView}
+          />
+          {onSsh ? (
+            <ActionButton
+              icon={<Laptop size={15} color={theme.colors.text} />}
+              label="SSH"
+              showLabel
+              onPress={onSsh}
+            />
+          ) : null}
           <ActionButton
             icon={<MessageSquareText size={15} color={theme.colors.text} />}
             label="Transcript"
@@ -2266,12 +2385,14 @@ function AgentCard({
 function CardSectionHeader({
   label,
   timestamp,
+  nowMs,
 }: {
   label: string;
   timestamp?: string | null;
+  nowMs: number;
 }) {
   const styles = useAppStyles();
-  const relative = relativeTimeLabel(timestamp);
+  const relative = relativeTimeLabel(timestamp, nowMs);
   return (
     <View style={styles.cardSectionHeader}>
       <Text style={styles.cardSectionLabel}>{label}</Text>
@@ -2290,12 +2411,14 @@ function ActionButton({
   onPress,
   disabled,
   active,
+  showLabel,
 }: {
   icon: React.ReactNode;
   label: string;
   onPress: () => void;
   disabled?: boolean;
   active?: boolean;
+  showLabel?: boolean;
 }) {
   const styles = useAppStyles();
   return (
@@ -2303,10 +2426,16 @@ function ActionButton({
       accessibilityLabel={label}
       disabled={disabled}
       hitSlop={3}
-      style={[styles.actionButton, active ? styles.actionButtonActive : null, disabled ? styles.disabledButton : null]}
+      style={[
+        styles.actionButton,
+        showLabel ? styles.actionButtonLabeled : null,
+        active ? styles.actionButtonActive : null,
+        disabled ? styles.disabledButton : null,
+      ]}
       onPress={onPress}
     >
       {icon}
+      {showLabel ? <Text style={styles.actionButtonLabel}>{label}</Text> : null}
     </Pressable>
   );
 }
@@ -2784,7 +2913,13 @@ function UpdateInfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function VoiceWaveform({ prominent = false }: { prominent?: boolean }) {
+function VoiceWaveform({
+  prominent = false,
+  color,
+}: {
+  prominent?: boolean;
+  color?: string;
+}) {
   const theme = useAppTheme();
   const styles = useAppStyles();
   const bars = React.useRef([0, 1, 2, 3, 4, 5, 6].map(() => new Animated.Value(0.18))).current;
@@ -2827,7 +2962,7 @@ function VoiceWaveform({ prominent = false }: { prominent?: boolean }) {
             styles.voiceWaveformBar,
             prominent ? styles.voiceWaveformBarProminent : null,
             {
-              backgroundColor: theme.colors.accent,
+              backgroundColor: color || theme.colors.accent,
               transform: [{ scaleY: bar }],
             },
           ]}
@@ -3419,6 +3554,8 @@ function PaneComposer({
   following = false,
   onToggleFollow,
   recognizing = false,
+  voiceRecording,
+  voiceTranscribing = false,
   disabled = false,
   sendDisabled = false,
   sendBusy = false,
@@ -3452,6 +3589,8 @@ function PaneComposer({
   following?: boolean;
   onToggleFollow?: () => void;
   recognizing?: boolean;
+  voiceRecording?: boolean;
+  voiceTranscribing?: boolean;
   disabled?: boolean;
   sendDisabled?: boolean;
   sendBusy?: boolean;
@@ -3476,6 +3615,19 @@ function PaneComposer({
   const busy = sendBusy || keyBusy || uploadBusy;
   const controlDisabled = disabled || busy;
   const sendIsDisabled = disabled || sendDisabled || sendBusy || keyBusy;
+  const standardVoiceRecording = voiceRecording ?? recognizing;
+  const standardVoicePresentation = resolveStandardVoiceInputPresentation({
+    recording: standardVoiceRecording,
+    transcribing: voiceTranscribing,
+  });
+  const standardVoiceActive = standardVoiceRecording || voiceTranscribing;
+  const standardVoiceDisabled =
+    disabled ||
+    voiceTranscribing ||
+    (!standardVoiceRecording && busy);
+  const standardActionDisabled = controlDisabled || standardVoiceActive;
+  const standardSendIsDisabled = sendIsDisabled || standardVoiceActive;
+  const standardStatus = standardVoiceActive ? "" : status;
   const visionSendIsDisabled = value.trim()
     ? sendIsDisabled
     : disabled || sendBusy || keyBusy || !onQuickKey;
@@ -3504,6 +3656,12 @@ function PaneComposer({
   React.useEffect(() => {
     if (!visionControls) setVisionMoreVisible(false);
   }, [visionControls]);
+
+  const toggleStandardVoice = React.useCallback(() => {
+    Keyboard.dismiss();
+    void Haptics.selectionAsync();
+    onToggleVoice();
+  }, [onToggleVoice]);
 
   const openSnippetManager = React.useCallback(() => {
     setSnippetDraftItems(snippetItems);
@@ -3553,14 +3711,87 @@ function PaneComposer({
     </Pressable>
   );
 
+  const standardVoiceControl = expanded ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={standardVoicePresentation.accessibilityLabel}
+      accessibilityHint={
+        voiceTranscribing
+          ? "Speech is being added to the draft"
+          : standardVoiceRecording
+          ? "Stops recording and adds the transcription to the draft"
+          : "Starts voice recording for this draft"
+      }
+      accessibilityState={{
+        busy: voiceTranscribing,
+        disabled: standardVoiceDisabled,
+        selected: standardVoiceRecording,
+      }}
+      style={[
+        styles.standardVoiceControl,
+        standardVoiceRecording ? styles.standardVoiceControlRecording : null,
+        voiceTranscribing ? styles.standardVoiceControlTranscribing : null,
+        standardVoiceDisabled && !voiceTranscribing ? styles.disabledButton : null,
+      ]}
+      disabled={standardVoiceDisabled}
+      onPress={toggleStandardVoice}
+    >
+      <View
+        style={[
+          styles.standardVoiceIndicator,
+          standardVoiceRecording ? styles.standardVoiceIndicatorRecording : null,
+          voiceTranscribing ? styles.standardVoiceIndicatorTranscribing : null,
+        ]}
+      >
+        {voiceTranscribing ? (
+          <ActivityIndicator size="small" color={theme.colors.accent} />
+        ) : standardVoiceRecording ? (
+          <VoiceWaveform color={theme.colors.surfaceRaised} />
+        ) : (
+          <Mic size={20} color={theme.colors.surfaceRaised} />
+        )}
+      </View>
+      <View style={styles.standardVoiceTextBlock}>
+        <Text
+          style={[
+            styles.standardVoiceTitle,
+            standardVoiceRecording ? styles.standardVoiceTitleRecording : null,
+          ]}
+          numberOfLines={1}
+        >
+          {standardVoicePresentation.title}
+        </Text>
+        <Text style={styles.standardVoiceDetail} numberOfLines={1}>
+          {standardVoicePresentation.detail}
+        </Text>
+      </View>
+      {standardVoicePresentation.actionLabel ? (
+        <Text
+          style={[
+            styles.standardVoiceAction,
+            standardVoiceRecording ? styles.standardVoiceActionRecording : null,
+          ]}
+        >
+          {standardVoicePresentation.actionLabel}
+        </Text>
+      ) : null}
+    </Pressable>
+  ) : null;
+
   const keysButton = (
     <Pressable
       accessibilityLabel="Open terminal keys"
-      style={[expanded ? styles.paneComposerInlineButton : styles.paneComposerIconButton, controlDisabled ? styles.disabledButton : null]}
-      disabled={controlDisabled}
+      style={[
+        expanded ? styles.paneComposerInlineButton : styles.paneComposerIconButton,
+        standardActionDisabled ? styles.disabledButton : null,
+      ]}
+      disabled={standardActionDisabled}
       onPress={onOpenKeys}
     >
-      <Terminal size={16} color={iconColor} />
+      <Terminal
+        size={16}
+        color={standardActionDisabled ? theme.colors.textMuted : theme.colors.text}
+      />
     </Pressable>
   );
 
@@ -3568,11 +3799,21 @@ function PaneComposer({
     expanded && presentation.showUpload ? (
       <Pressable
         accessibilityLabel="Upload image or file"
-        style={[styles.paneComposerInlineButton, uploadBusy ? styles.disabledButton : null]}
-        disabled={disabled || uploadBusy}
+        style={[
+          styles.paneComposerInlineButton,
+          disabled || uploadBusy || standardVoiceActive ? styles.disabledButton : null,
+        ]}
+        disabled={disabled || uploadBusy || standardVoiceActive}
         onPress={onOpenUpload}
       >
-        {uploadBusy ? <ActivityIndicator color={theme.colors.text} /> : <Upload size={16} color={iconColor} />}
+        {uploadBusy ? (
+          <ActivityIndicator color={theme.colors.text} />
+        ) : (
+          <Upload
+            size={16}
+            color={disabled || standardVoiceActive ? theme.colors.textMuted : theme.colors.text}
+          />
+        )}
       </Pressable>
     ) : null;
 
@@ -3652,9 +3893,9 @@ function PaneComposer({
       accessibilityLabel="Send terminal input"
       style={[
         expanded ? styles.paneComposerInlineSendButton : styles.paneComposerSendButton,
-        sendIsDisabled ? styles.disabledButton : null,
+        standardSendIsDisabled ? styles.disabledButton : null,
       ]}
-      disabled={sendIsDisabled}
+      disabled={standardSendIsDisabled}
       onPress={onSend}
     >
       {sendBusy || keyBusy ? (
@@ -3887,8 +4128,11 @@ function PaneComposer({
             {snippetItems.map((shortcut, index) => (
               <Pressable
                 key={`${shortcut.text}-${index}`}
-                style={styles.shortcutChip}
-                disabled={disabled}
+                style={[
+                  styles.shortcutChip,
+                  standardVoiceActive ? styles.disabledButton : null,
+                ]}
+                disabled={disabled || standardVoiceActive}
                 onPress={() => {
                   onShortcut?.(shortcut.text);
                   void Haptics.selectionAsync();
@@ -3902,8 +4146,11 @@ function PaneComposer({
           </ScrollView>
           {showClear ? (
             <Pressable
-              style={[styles.snippetIconButton, value.length === 0 ? styles.disabledButton : null]}
-              disabled={disabled || value.length === 0}
+              style={[
+                styles.snippetIconButton,
+                value.length === 0 || standardVoiceActive ? styles.disabledButton : null,
+              ]}
+              disabled={disabled || value.length === 0 || standardVoiceActive}
               onPress={() => {
                 onClear?.();
                 void Haptics.selectionAsync();
@@ -3914,8 +4161,11 @@ function PaneComposer({
           ) : null}
           <Pressable
             accessibilityLabel="Manage shortcuts"
-            style={[styles.snippetIconButton, snippets.isFetching ? styles.disabledButton : null]}
-            disabled={disabled}
+            style={[
+              styles.snippetIconButton,
+              snippets.isFetching || standardVoiceActive ? styles.disabledButton : null,
+            ]}
+            disabled={disabled || standardVoiceActive}
             onPress={openSnippetManager}
           >
             <ListPlus size={16} color={theme.colors.text} />
@@ -3924,21 +4174,21 @@ function PaneComposer({
       ) : null}
       {expanded ? (
         <>
+          {standardVoiceControl}
           <View style={styles.paneComposerInputShell}>
             {input}
             <View style={styles.paneComposerInlineActions}>
               {exitFullscreenButton}
               {closeTerminalButton}
               {uploadButton}
-              {voiceButton}
               {keysButton}
               {sendButton}
             </View>
           </View>
           {followButton}
-          {reserveStatusSpace || status || error ? (
+          {reserveStatusSpace || standardStatus || error ? (
             <Text style={styles.paneComposerStatus} numberOfLines={1}>
-              {status || error || ""}
+              {standardStatus || error || ""}
             </Text>
           ) : null}
           {error ? (
@@ -4318,6 +4568,8 @@ function SendModal({ target, onClose }: { target: AgentSession | null; onClose: 
         }}
         onRetry={retrySend}
         recognizing={voiceInput.active}
+        voiceRecording={voiceInput.recording}
+        voiceTranscribing={voiceInput.transcribing}
         disabled={!target}
         sendDisabled={!text.trim()}
         sendBusy={sendText.isPending}
@@ -4457,6 +4709,480 @@ function RenameModal({ target, onClose }: { target: AgentSession | null; onClose
         <Text style={styles.primaryButtonText}>Rename</Text>
       </Pressable>
       {rename.error ? <Text style={styles.errorText}>{rename.error.message}</Text> : null}
+    </SheetModal>
+  );
+}
+
+function EmbeddedSshModal({
+  target,
+  controllerUrl,
+  onClose,
+}: {
+  target: AgentSession | null;
+  controllerUrl: string;
+  onClose: () => void;
+}) {
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  const visionControls = useVisionControls();
+  const { width: windowWidth } = useWindowDimensions();
+  const terminalRef = React.useRef<BlinkTerminalHandle | null>(null);
+  const [profileLoading, setProfileLoading] = React.useState(false);
+  const [profile, setProfile] = React.useState<StoredSshProfile | null>(null);
+  const [editing, setEditing] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [profileError, setProfileError] = React.useState("");
+  const [host, setHost] = React.useState("");
+  const [user, setUser] = React.useState("");
+  const [port, setPort] = React.useState("22");
+  const [authMethod, setAuthMethod] = React.useState<SshAuthMethod>("password");
+  const [password, setPassword] = React.useState("");
+  const [privateKey, setPrivateKey] = React.useState("");
+  const [connectionState, setConnectionState] = React.useState<BlinkTerminalState>("idle");
+  const [connectionMessage, setConnectionMessage] = React.useState("");
+  const [connectionGeneration, setConnectionGeneration] = React.useState(0);
+  const machineId = target ? agentMachineKey(target) : "";
+  const targetHost = target?.machineHostname || "";
+  const profileKey = target ? sshProfileStorageKey(controllerUrl, machineId) : "";
+  const isWide = windowWidth >= 760;
+
+  const loadDraft = React.useCallback((nextProfile: StoredSshProfile | null, nextHost: string) => {
+    setHost(nextProfile?.host || nextHost);
+    setUser(nextProfile?.user || "");
+    setPort(String(nextProfile?.port || 22));
+    setAuthMethod(nextProfile?.authMethod || "password");
+    setPassword(nextProfile?.password || "");
+    setPrivateKey(nextProfile?.privateKey || "");
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    terminalRef.current = null;
+    setProfile(null);
+    setConnectionState("idle");
+    setConnectionMessage("");
+    setProfileError("");
+    setSaving(false);
+    loadDraft(null, targetHost);
+    if (!profileKey || visionControls) {
+      setProfileLoading(false);
+      setEditing(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setProfileLoading(true);
+    void SecureStore.getItemAsync(profileKey)
+      .then((value) => {
+        if (cancelled) return;
+        const stored = readStoredSshProfile(value);
+        setProfile(stored);
+        setEditing(!stored);
+        loadDraft(stored, targetHost);
+        if (value && !stored) {
+          setProfileError("The saved SSH profile could not be read. Enter it again.");
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setEditing(true);
+        setProfileError(
+          error instanceof Error ? error.message : "Could not read the saved SSH profile.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setProfileLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadDraft, profileKey, targetHost, visionControls]);
+
+  const saveProfile = React.useCallback(async () => {
+    const nextPort = Number(port);
+    const nextHost = host.trim();
+    const nextUser = user.trim();
+    const credential = authMethod === "password" ? password : privateKey;
+    if (!nextHost) {
+      setProfileError("Host is required.");
+      return;
+    }
+    if (!nextUser) {
+      setProfileError("Username is required.");
+      return;
+    }
+    if (!Number.isInteger(nextPort) || nextPort < 1 || nextPort > 65535) {
+      setProfileError("Port must be a number between 1 and 65535.");
+      return;
+    }
+    if (!credential.trim()) {
+      setProfileError(
+        authMethod === "password" ? "Password is required." : "Private key is required.",
+      );
+      return;
+    }
+    if (!profileKey) return;
+
+    const nextProfile: StoredSshProfile = {
+      version: 1,
+      host: nextHost,
+      user: nextUser,
+      port: nextPort,
+      authMethod,
+      password: authMethod === "password" ? password : undefined,
+      privateKey: authMethod === "private-key" ? privateKey : undefined,
+    };
+    setSaving(true);
+    setProfileError("");
+    try {
+      await SecureStore.setItemAsync(profileKey, JSON.stringify(nextProfile));
+      setProfile(nextProfile);
+      setEditing(false);
+      setConnectionState("connecting");
+      setConnectionMessage("Opening a native Blink SSH session…");
+      setConnectionGeneration((generation) => generation + 1);
+      void Haptics.selectionAsync();
+    } catch (error) {
+      setProfileError(
+        error instanceof Error ? error.message : "Could not save the SSH profile.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [authMethod, host, password, port, privateKey, profileKey, user]);
+
+  const beginEditing = React.useCallback(() => {
+    void terminalRef.current?.disconnect().catch(() => {});
+    if (profile) loadDraft(profile, targetHost);
+    setProfileError("");
+    setEditing(true);
+  }, [loadDraft, profile, targetHost]);
+
+  const forgetProfile = React.useCallback(() => {
+    if (!profileKey) return;
+    Alert.alert(
+      "Forget SSH profile?",
+      "This removes the saved host, username, and credential from this device.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Forget",
+          style: "destructive",
+          onPress: () => {
+            void terminalRef.current?.disconnect().catch(() => {});
+            void SecureStore.deleteItemAsync(profileKey)
+              .catch(() => {})
+              .finally(() => {
+                setProfile(null);
+                loadDraft(null, targetHost);
+                setEditing(true);
+                setConnectionState("idle");
+                setConnectionMessage("");
+              });
+          },
+        },
+      ],
+    );
+  }, [loadDraft, profileKey, targetHost]);
+
+  const close = React.useCallback(() => {
+    void terminalRef.current?.disconnect().catch(() => {});
+    Keyboard.dismiss();
+    onClose();
+  }, [onClose]);
+
+  const handleHostKeyPrompt = React.useCallback(
+    (event: { nativeEvent: { fingerprint: string; changed: boolean } }) => {
+      const { fingerprint, changed } = event.nativeEvent;
+      const title = changed ? "SECURITY WARNING: Host key changed" : "Trust this SSH host?";
+      const body = changed
+        ? `The identity of ${profile?.host || "this host"} no longer matches the previous key. This can indicate a man-in-the-middle attack or a rebuilt machine.\n\nFingerprint\n${fingerprint}`
+        : `Verify this fingerprint for ${profile?.host || "this host"} before connecting.\n\n${fingerprint}`;
+      Alert.alert(title, body, [
+        {
+          text: "Cancel",
+          style: "cancel",
+          onPress: () => {
+            void terminalRef.current?.approveHostKey(false).catch(() => {});
+          },
+        },
+        {
+          text: changed ? "Trust changed key" : "Trust host",
+          style: changed ? "destructive" : "default",
+          onPress: () => {
+            void terminalRef.current?.approveHostKey(true).catch(() => {});
+          },
+        },
+      ]);
+    },
+    [profile?.host],
+  );
+
+  const reconnect = React.useCallback(() => {
+    setConnectionState("connecting");
+    setConnectionMessage("Reconnecting…");
+    void terminalRef.current?.reconnect().catch((error) => {
+      setConnectionState("failed");
+      setConnectionMessage(error instanceof Error ? error.message : String(error));
+    });
+  }, []);
+
+  const disconnect = React.useCallback(() => {
+    void terminalRef.current?.disconnect()
+      .then(() => {
+        setConnectionState("disconnected");
+        setConnectionMessage("Disconnected");
+      })
+      .catch((error) => {
+        setConnectionState("failed");
+        setConnectionMessage(error instanceof Error ? error.message : String(error));
+      });
+  }, []);
+
+  const setup = profileLoading ? (
+    <View style={styles.sshLoading}>
+      <ActivityIndicator color={theme.colors.accent} />
+      <Text style={styles.sshMutedText}>Loading the saved SSH profile…</Text>
+    </View>
+  ) : (
+    <ScrollView
+      style={styles.sshSetupScroll}
+      contentContainerStyle={styles.sshSetupContent}
+      keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.sshSetupIntro}>
+        <Text style={styles.sshSetupTitle}>Connect with Blink SSH</Text>
+        <Text style={styles.sshMutedText}>
+          The credential is kept in this device’s secure store for this controller and machine.
+          Terminal traffic stays in the native SSH view.
+        </Text>
+      </View>
+      <View style={[styles.sshSetupRow, isWide ? null : styles.sshSetupRowNarrow]}>
+        <View style={[styles.inputGroup, styles.sshSetupGrow]}>
+          <Text style={styles.inputLabel}>Host</Text>
+          <KeyboardTextInput
+            value={host}
+            onChangeText={setHost}
+            autoFocus={false}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            placeholder={target?.machineHostname || "mini.example.com"}
+            placeholderTextColor={theme.colors.textMuted}
+            style={styles.textInput}
+          />
+        </View>
+        <View style={styles.sshPortGroup}>
+          <Text style={styles.inputLabel}>Port</Text>
+          <KeyboardTextInput
+            value={port}
+            onChangeText={setPort}
+            autoFocus={false}
+            keyboardType="number-pad"
+            placeholder="22"
+            placeholderTextColor={theme.colors.textMuted}
+            style={styles.textInput}
+          />
+        </View>
+      </View>
+      <View style={styles.inputGroup}>
+        <Text style={styles.inputLabel}>Username</Text>
+        <KeyboardTextInput
+          value={user}
+          onChangeText={setUser}
+          autoFocus={false}
+          autoCapitalize="none"
+          autoCorrect={false}
+          textContentType="username"
+          placeholder="Remote account"
+          placeholderTextColor={theme.colors.textMuted}
+          style={styles.textInput}
+        />
+      </View>
+      <View style={styles.inputGroup}>
+        <Text style={styles.inputLabel}>Authentication</Text>
+        <View style={styles.segmentRow}>
+          <Segment
+            active={authMethod === "password"}
+            label="Password"
+            onPress={() => setAuthMethod("password")}
+          />
+          <Segment
+            active={authMethod === "private-key"}
+            label="Private key"
+            onPress={() => setAuthMethod("private-key")}
+          />
+        </View>
+      </View>
+      {authMethod === "password" ? (
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Password</Text>
+          <KeyboardTextInput
+            value={password}
+            onChangeText={setPassword}
+            autoFocus={false}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+            textContentType="password"
+            placeholder="SSH password"
+            placeholderTextColor={theme.colors.textMuted}
+            style={styles.textInput}
+          />
+        </View>
+      ) : (
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>OpenSSH private key</Text>
+          <KeyboardTextInput
+            value={privateKey}
+            onChangeText={setPrivateKey}
+            autoFocus={false}
+            autoCapitalize="none"
+            autoCorrect={false}
+            multiline
+            numberOfLines={5}
+            placeholder="Paste the private key"
+            placeholderTextColor={theme.colors.textMuted}
+            style={[styles.textInput, styles.sshPrivateKeyInput]}
+          />
+          <Text style={styles.inputLabel}>
+            The key is visible while editing and encrypted by iOS Secure Store after saving.
+          </Text>
+        </View>
+      )}
+      {profileError ? <Text style={styles.errorText}>{profileError}</Text> : null}
+      <View style={styles.sshSetupActions}>
+        {profile ? (
+          <Pressable
+            accessibilityRole="button"
+            style={styles.sshSecondaryButton}
+            onPress={() => {
+              setEditing(false);
+              setProfileError("");
+            }}
+          >
+            <Text style={styles.sshSecondaryButtonText}>Cancel</Text>
+          </Pressable>
+        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          style={[styles.primaryButton, styles.sshConnectButton, saving ? styles.disabledButton : null]}
+          disabled={saving}
+          onPress={() => {
+            void saveProfile();
+          }}
+        >
+          {saving ? (
+            <ActivityIndicator color={theme.colors.surfaceRaised} />
+          ) : (
+            <Text style={styles.primaryButtonText}>Save & connect</Text>
+          )}
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+
+  const statusLabel = connectionState.replace("-", " ");
+  const terminal = profile ? (
+    <View style={[styles.sshWorkspace, isWide ? styles.sshWorkspaceWide : null]}>
+      <View style={[styles.sshRail, isWide ? styles.sshRailWide : null]}>
+        <View style={styles.sshRailHeading}>
+          <View style={styles.sshMachineIcon}>
+            <Laptop size={18} color={theme.colors.text} />
+          </View>
+          <View style={styles.sshRailTitleBlock}>
+            <Text style={styles.sshRailTitle} numberOfLines={1}>
+              {target ? agentTitle(target) : "SSH"}
+            </Text>
+            <Text style={styles.sshRailEndpoint} numberOfLines={1}>
+              {profile.user}@{profile.host}:{profile.port}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.sshStatusRow}>
+          <View
+            style={[
+              styles.sshStatusDot,
+              connectionState === "connected"
+                ? styles.sshStatusConnected
+                : connectionState === "failed"
+                  ? styles.sshStatusFailed
+                  : styles.sshStatusPending,
+            ]}
+          />
+          <Text style={styles.sshStatusLabel}>{statusLabel}</Text>
+        </View>
+        {connectionMessage ? (
+          <Text style={styles.sshConnectionMessage} numberOfLines={isWide ? 4 : 1}>
+            {connectionMessage}
+          </Text>
+        ) : null}
+        <View style={styles.sshRailActions}>
+          <Pressable accessibilityRole="button" style={styles.sshRailButton} onPress={reconnect}>
+            <RefreshCcw size={15} color={theme.colors.text} />
+            <Text style={styles.sshRailButtonText}>Reconnect</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" style={styles.sshRailButton} onPress={disconnect}>
+            <X size={15} color={theme.colors.text} />
+            <Text style={styles.sshRailButtonText}>Disconnect</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" style={styles.sshRailButton} onPress={beginEditing}>
+            <Settings2 size={15} color={theme.colors.text} />
+            <Text style={styles.sshRailButtonText}>Connection</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            style={[styles.sshRailButton, styles.sshRailButtonDanger]}
+            onPress={forgetProfile}
+          >
+            <Trash2 size={15} color={theme.colors.danger} />
+            <Text style={[styles.sshRailButtonText, styles.sshRailButtonTextDanger]}>Forget</Text>
+          </Pressable>
+        </View>
+      </View>
+      <View style={styles.sshTerminalFrame}>
+        <CJMUXBlinkTerminal
+          key={`${profileKey}:${connectionGeneration}`}
+          ref={terminalRef}
+          style={styles.sshTerminal}
+          host={profile.host}
+          user={profile.user}
+          port={profile.port}
+          password={profile.authMethod === "password" ? profile.password : undefined}
+          privateKey={profile.authMethod === "private-key" ? profile.privateKey : undefined}
+          connectionKey={`${profileKey}:${connectionGeneration}`}
+          autoFocus={Platform.OS === "ios" && Platform.isPad && !visionControls}
+          colorScheme={theme.dark ? "dark" : "light"}
+          fontSize={isWide ? 14 : 13}
+          onStateChange={({ nativeEvent }) => {
+            setConnectionState(nativeEvent.state);
+            setConnectionMessage(nativeEvent.message || "");
+          }}
+          onHostKeyPrompt={handleHostKeyPrompt}
+          onExit={({ nativeEvent }) => {
+            setConnectionState("disconnected");
+            setConnectionMessage(nativeEvent.reason || "SSH session ended");
+          }}
+        />
+      </View>
+    </View>
+  ) : null;
+
+  return (
+    <SheetModal
+      visible={Boolean(target) && !visionControls}
+      title={target ? `SSH · ${agentTitle(target)}` : "SSH"}
+      onClose={close}
+      tall
+      wide
+      fullscreenOnWide
+      captureShortcuts={false}
+    >
+      {profileLoading || editing || !profile ? setup : terminal}
     </SheetModal>
   );
 }
@@ -5011,6 +5737,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         following={terminalFollow}
         onToggleFollow={terminalFullscreen && Platform.OS === "ios" ? toggleTerminalFollow : undefined}
         recognizing={terminalVoiceInput.active}
+        voiceRecording={terminalVoiceInput.recording}
+        voiceTranscribing={terminalVoiceInput.transcribing}
         disabled={!target}
         sendBusy={sendText.isPending}
         keyBusy={sendKey.isPending}
@@ -6197,6 +6925,7 @@ function SheetModal({
   fullscreen,
   fullscreenOnWide,
   hideHeader,
+  captureShortcuts = true,
 }: {
   visible: boolean;
   title: string;
@@ -6209,6 +6938,7 @@ function SheetModal({
   fullscreen?: boolean;
   fullscreenOnWide?: boolean;
   hideHeader?: boolean;
+  captureShortcuts?: boolean;
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
@@ -6375,7 +7105,11 @@ function SheetModal({
       onRequestClose={closeSheet}
     >
       <CJMUXKeyboardShortcutSurface
-        mode={Platform.OS === "ios" && Platform.isPad ? "escape" : "none"}
+        mode={
+          captureShortcuts && Platform.OS === "ios" && Platform.isPad
+            ? "escape"
+            : "none"
+        }
         onShortcutKeyDown={({ nativeEvent }) => {
           if (nativeEvent.key === "Escape") closeSheet();
         }}
@@ -7006,7 +7740,27 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   cardMeta: {
     ...theme.typography.meta,
     color: theme.colors.textMuted,
+    flex: 1,
+    minWidth: 0,
+  },
+  cardMetaRow: {
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 8,
     marginTop: 2,
+  },
+  cardActivityTime: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    flexShrink: 0,
+    fontSize: 13,
+    lineHeight: 17,
+    fontVariant: ["tabular-nums"],
+  },
+  cardActivityTimeRecent: {
+    color: theme.colors.accent,
+    fontFamily: "Lato_700Bold",
   },
   cardBody: {
     gap: 10,
@@ -7064,7 +7818,7 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
   cardSectionTime: {
     ...theme.typography.meta,
     color: theme.colors.textMuted,
-    opacity: 0.72,
+    fontVariant: ["tabular-nums"],
   },
   promptText: {
     ...theme.typography.body,
@@ -7105,6 +7859,18 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     backgroundColor: theme.colors.surface,
     alignItems: "center",
     justifyContent: "center",
+  },
+  actionButtonLabeled: {
+    width: "auto",
+    minWidth: 72,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    gap: 6,
+  },
+  actionButtonLabel: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+    fontFamily: "Lato_700Bold",
   },
   actionButtonActive: {
     borderColor: theme.colors.accent,
@@ -7467,6 +8233,220 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     paddingVertical: 10,
     ...theme.typography.body,
   },
+  sshLoading: {
+    flex: 1,
+    minHeight: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  sshMutedText: {
+    ...theme.typography.body,
+    color: theme.colors.textMuted,
+  },
+  sshSetupScroll: {
+    flex: 1,
+    minHeight: 0,
+    width: "100%",
+  },
+  sshSetupContent: {
+    width: "100%",
+    maxWidth: 620,
+    alignSelf: "center",
+    gap: 14,
+    paddingBottom: 24,
+  },
+  sshSetupIntro: {
+    gap: 5,
+  },
+  sshSetupTitle: {
+    ...theme.typography.section,
+    fontSize: 18,
+    lineHeight: 24,
+    color: theme.colors.text,
+  },
+  sshSetupRow: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 10,
+  },
+  sshSetupRowNarrow: {
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
+  sshSetupGrow: {
+    flex: 1,
+  },
+  sshPortGroup: {
+    width: layout.isWide ? 116 : "100%",
+    minWidth: 0,
+    gap: 6,
+  },
+  sshSetupActions: {
+    width: "100%",
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 2,
+  },
+  sshPrivateKeyInput: {
+    minHeight: 116,
+    textAlignVertical: "top",
+    fontFamily: "JetBrainsMono_400Regular",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  sshConnectButton: {
+    width: "auto",
+    minWidth: 160,
+    flexGrow: 1,
+  },
+  sshSecondaryButton: {
+    minHeight: 42,
+    paddingHorizontal: 16,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sshSecondaryButtonText: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  sshWorkspace: {
+    flex: 1,
+    minHeight: 0,
+    width: "100%",
+    gap: 12,
+  },
+  sshWorkspaceWide: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
+  sshRail: {
+    width: "100%",
+    flexShrink: 0,
+    gap: 8,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  sshRailWide: {
+    width: 248,
+    paddingBottom: 0,
+    paddingRight: 12,
+    borderBottomWidth: 0,
+    borderRightWidth: 1,
+    borderRightColor: theme.colors.border,
+  },
+  sshRailHeading: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  sshMachineIcon: {
+    width: 34,
+    height: 34,
+    flexShrink: 0,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sshRailTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sshRailTitle: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  sshRailEndpoint: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    fontFamily: "JetBrainsMono_400Regular",
+  },
+  sshStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  sshStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: theme.radii.full,
+  },
+  sshStatusConnected: {
+    backgroundColor: theme.colors.success,
+  },
+  sshStatusFailed: {
+    backgroundColor: theme.colors.danger,
+  },
+  sshStatusPending: {
+    backgroundColor: theme.colors.warning,
+  },
+  sshStatusLabel: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+    fontFamily: "Lato_700Bold",
+    textTransform: "capitalize",
+  },
+  sshConnectionMessage: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  sshRailActions: {
+    flexDirection: layout.isWide ? "column" : "row",
+    flexWrap: "wrap",
+    gap: 7,
+    marginTop: layout.isWide ? 4 : 0,
+  },
+  sshRailButton: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: layout.isWide ? "flex-start" : "center",
+    gap: 8,
+    paddingHorizontal: 10,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+  },
+  sshRailButtonDanger: {
+    borderColor: theme.dark ? "#704848" : "#e5b9b9",
+  },
+  sshRailButtonText: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+    fontFamily: "Lato_700Bold",
+  },
+  sshRailButtonTextDanger: {
+    color: theme.colors.danger,
+  },
+  sshTerminalFrame: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 180,
+    overflow: "hidden",
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.dark ? "#0d0f12" : "#fbfbf8",
+  },
+  sshTerminal: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+  },
   visionVoiceField: {
     width: "100%",
     minWidth: 0,
@@ -7743,7 +8723,7 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     borderWidth: 0,
     borderRadius: 0,
     backgroundColor: "transparent",
-    paddingBottom: 58,
+    paddingBottom: 64,
   },
   paneComposerInputCompact: {
     height: 44,
@@ -7793,8 +8773,8 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     gap: 7,
   },
   paneComposerInlineButton: {
-    width: 38,
-    height: 38,
+    width: 44,
+    height: 44,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -7859,12 +8839,75 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     justifyContent: "center",
   },
   paneComposerInlineSendButton: {
-    width: 38,
-    height: 38,
+    width: 44,
+    height: 44,
     borderRadius: theme.radii.lg,
     backgroundColor: theme.colors.accent,
     alignItems: "center",
     justifyContent: "center",
+  },
+  standardVoiceControl: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: layout.isWide ? 56 : 60,
+    paddingHorizontal: layout.isWide ? 14 : 10,
+    paddingVertical: 8,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+  },
+  standardVoiceControlRecording: {
+    borderColor: theme.colors.danger,
+    backgroundColor: theme.dark ? "#321d1d" : "#fff5f5",
+  },
+  standardVoiceControlTranscribing: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#1b2936" : "#f2f6fb",
+  },
+  standardVoiceIndicator: {
+    width: 40,
+    height: 40,
+    flexShrink: 0,
+    borderRadius: theme.radii.lg,
+    backgroundColor: theme.colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  standardVoiceIndicatorRecording: {
+    backgroundColor: theme.colors.danger,
+  },
+  standardVoiceIndicatorTranscribing: {
+    backgroundColor: theme.colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  standardVoiceTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  standardVoiceTitle: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  standardVoiceTitleRecording: {
+    color: theme.colors.danger,
+  },
+  standardVoiceDetail: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+  },
+  standardVoiceAction: {
+    flexShrink: 0,
+    ...theme.typography.section,
+    color: theme.colors.accent,
+  },
+  standardVoiceActionRecording: {
+    color: theme.colors.danger,
   },
   paneComposerSubmitButton: {
     width: "100%",

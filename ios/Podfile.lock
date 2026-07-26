@@ -1,4 +1,6 @@
 PODS:
+  - CJMUXBlinkTerminal (1.0.0):
+    - ExpoModulesCore
   - CJMUXKeyboardShortcuts (1.0.0):
     - ExpoModulesCore
   - CJMUXVisionDevice (1.0.0):
@@ -2569,6 +2571,7 @@ PODS:
   - Yoga (0.0.0)
 
 DEPENDENCIES:
+  - CJMUXBlinkTerminal (from `../modules/cjmux-blink-terminal/ios`)
   - CJMUXKeyboardShortcuts (from `../modules/cjmux-keyboard-shortcuts/ios`)
   - CJMUXVisionDevice (from `../modules/cjmux-vision-device/ios`)
   - EASClient (from `../node_modules/expo-eas-client/ios`)
@@ -2701,6 +2704,8 @@ SPEC REPOS:
     - ReachabilitySwift
 
 EXTERNAL SOURCES:
+  CJMUXBlinkTerminal:
+    :path: "../modules/cjmux-blink-terminal/ios"
   CJMUXKeyboardShortcuts:
     :path: "../modules/cjmux-keyboard-shortcuts/ios"
   CJMUXVisionDevice:
@@ -2954,6 +2959,7 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
+  CJMUXBlinkTerminal: 5bac9a6f668b02fc96fb9f50d5379cbcb71ec631
   CJMUXKeyboardShortcuts: 46f3febdf83b1f96ee2eca18463f445aef2cc664
   CJMUXVisionDevice: b2b0914bacd4538937e0e7031fcbeed675a45d44
   EASClient: 7d3aa729ae2cd433b5bc314a6d3543fad381fa1c
