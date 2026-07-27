@@ -139,15 +139,11 @@ function buildInfo(currentlyRunning: CurrentlyRunningInfo, enabled: boolean): Ot
   };
 }
 
-export function useOtaUpdates({
-  isVisionDevice = false,
-}: {
-  isVisionDevice?: boolean;
-} = {}): OtaUpdateController {
+export function useOtaUpdates(): OtaUpdateController {
   const updatesState = Updates.useUpdates();
   const policy = React.useMemo(
-    () => otaUpdatePolicy(isVisionDevice),
-    [isVisionDevice],
+    () => otaUpdatePolicy(Platform.OS === "ios"),
+    [],
   );
   const enabled = Platform.OS !== "web" && !__DEV__ && Updates.isEnabled;
   const [phase, setPhase] = React.useState<OtaUpdatePhase>(enabled ? "idle" : "disabled");

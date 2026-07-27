@@ -762,9 +762,7 @@ function CommandCenterScreen() {
   );
   const styles = React.useMemo(() => createStyles(theme, layout), [layout, theme]);
   const relativeTimeNow = Date.now();
-  const otaUpdates = useOtaUpdates({
-    isVisionDevice: NATIVE_VISION_CONTROLS_DETECTED,
-  });
+  const otaUpdates = useOtaUpdates();
   const visionControlsEnabled = resolveVisionControls(
     visionControlsPreference,
     NATIVE_VISION_CONTROLS_DETECTED,

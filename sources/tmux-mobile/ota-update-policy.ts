@@ -8,14 +8,14 @@ export type OtaUpdatePolicy = {
   readyStatusLabel: string;
 };
 
-export function otaUpdatePolicy(isVisionDevice: boolean): OtaUpdatePolicy {
-  if (isVisionDevice) {
+export function otaUpdatePolicy(isIosDevice: boolean): OtaUpdatePolicy {
+  if (isIosDevice) {
     return {
       applyMode: "cold-start",
-      applyLabel: "How to finish",
+      applyLabel: "Restart app",
       readyTitle: "Update downloaded",
       readyMessage:
-        "Fully quit AMUX, then reopen it. Vision Pro will install the update on that cold start.",
+        "Fully quit AMUX, then reopen it. iOS will install the update on that cold start.",
       readyStatusLabel: "Downloaded — reopen AMUX",
     };
   }
