@@ -125,6 +125,7 @@ import {
   agentStarKeys,
   agentSubtitle,
   agentTitle,
+  compareMachinesByOwnerAndName,
   isAgentStarred,
   machineKey,
   machineLabel,
@@ -821,7 +822,11 @@ function CommandCenterScreen() {
     [],
   );
 
-  const machines = commandCenter.data?.machines || EMPTY_MACHINES;
+  const rawMachines = commandCenter.data?.machines || EMPTY_MACHINES;
+  const machines = React.useMemo(
+    () => rawMachines.slice().sort(compareMachinesByOwnerAndName),
+    [rawMachines],
+  );
   const rawAgents = commandCenter.data?.agents || EMPTY_AGENTS;
   const stars = React.useMemo(() => new Set(cardStars.data?.keys || []), [cardStars.data?.keys]);
   const latestUnreadMessageAt = React.useMemo(

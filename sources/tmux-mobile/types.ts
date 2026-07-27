@@ -192,6 +192,38 @@ export function machineLabel(machine: Machine | null | undefined): string {
   return String(machine?.machineAlias || machine?.hostname || machine?.machineId || "local");
 }
 
+export const PRIORITY_MACHINE_OWNER_EMAIL = "sonicgg@gmail.com";
+
+function compareMachineText(left: string, right: string): number {
+  return left.localeCompare(right, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function normalizedMachineOwner(machine: Machine | null | undefined): string {
+  return String(machine?.ownerEmail || "").trim().toLowerCase();
+}
+
+function machineOwnerRank(ownerEmail: string): number {
+  if (ownerEmail === PRIORITY_MACHINE_OWNER_EMAIL) return 0;
+  return ownerEmail ? 1 : 2;
+}
+
+export function compareMachinesByOwnerAndName(left: Machine, right: Machine): number {
+  const leftOwner = normalizedMachineOwner(left);
+  const rightOwner = normalizedMachineOwner(right);
+  const rankOrder = machineOwnerRank(leftOwner) - machineOwnerRank(rightOwner);
+  if (rankOrder !== 0) return rankOrder;
+
+  const ownerOrder = compareMachineText(leftOwner, rightOwner);
+  if (ownerOrder !== 0) return ownerOrder;
+
+  const labelOrder = compareMachineText(machineLabel(left), machineLabel(right));
+  if (labelOrder !== 0) return labelOrder;
+  return compareMachineText(machineKey(left), machineKey(right));
+}
+
 export function agentMachineKey(agent: AgentSession | null | undefined): string {
   return String(agent?.machineId || agent?.machineRawId || agent?.machineHostname || "local");
 }
