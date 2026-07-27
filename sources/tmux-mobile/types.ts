@@ -57,6 +57,13 @@ export interface Machine {
   muxes?: MachineMux[];
 }
 
+export interface AgentModeState {
+  mode?: string | null;
+  label?: string;
+  effort?: string | null;
+  model?: string | null;
+}
+
 export interface AgentSession {
   machineId?: string;
   machineRawId?: string;
@@ -85,6 +92,7 @@ export interface AgentSession {
   lastRole?: string;
   turn?: string;
   turnConfidence?: string;
+  agentMode?: AgentModeState | null;
   waitingForInput?: boolean;
   waitingConfidence?: string;
   turnCount?: number;

@@ -9,6 +9,13 @@ export type SessionCardSummary = {
   lastActivityAt: string | null;
 };
 
+export function sessionModelLabel(agent: AgentSession): string {
+  return [agent.agentMode?.model, agent.agentMode?.effort]
+    .map(cleanLabel)
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function cleanLabel(value: string | null | undefined): string {
   return String(value || "").trim();
 }

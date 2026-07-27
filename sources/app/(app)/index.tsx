@@ -149,7 +149,10 @@ import {
 } from "@/tmux-mobile/command-center-shortcuts";
 import { LegacyIPadShortcutCapture } from "@/tmux-mobile/legacy-ipad-shortcut-capture";
 import { isRecentActivity, relativeTimeLabel } from "@/tmux-mobile/relative-time";
-import { sessionCardSummary } from "@/tmux-mobile/session-card";
+import {
+  sessionCardSummary,
+  sessionModelLabel,
+} from "@/tmux-mobile/session-card";
 import {
   FONT_SCALE_LABELS,
   FONT_SCALE_LEVELS,
@@ -2265,6 +2268,7 @@ function AgentCard({
   const status = agent.waitingForInput ? "waiting" : agent.status || agent.turn || "unverified";
   const running = status === "running";
   const summary = sessionCardSummary(agent);
+  const modelLabel = sessionModelLabel(agent);
   const activityLabel = relativeTimeLabel(summary.lastActivityAt, nowMs) || "No activity";
   const recentActivity = isRecentActivity(summary.lastActivityAt, nowMs);
   const statusStyle =
@@ -2307,7 +2311,9 @@ function AgentCard({
           summary.sessionName || "unnamed"
         }. Directory ${summary.directory || "unknown"}. Machine ${
           summary.machineName || "unknown"
-        }. Agent ${agent.kind || "unknown"}. Status ${status}. Last activity ${activityLabel}.`}
+        }. Agent ${agent.kind || "unknown"}.${
+          modelLabel ? ` Model and reasoning effort ${modelLabel}.` : ""
+        } Status ${status}. Last activity ${activityLabel}.`}
         accessibilityHint="Select session"
         accessibilityState={{ selected }}
         style={({ pressed }) => [
@@ -2353,6 +2359,11 @@ function AgentCard({
                 {activityLabel}
               </Text>
             </View>
+            {modelLabel ? (
+              <Text style={styles.cardModelMeta} numberOfLines={1}>
+                {modelLabel}
+              </Text>
+            ) : null}
           </View>
         </View>
       </Pressable>
@@ -7878,6 +7889,13 @@ function createStyles(
     alignItems: "baseline",
     gap: 8,
     marginTop: 2,
+  },
+  cardModelMeta: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    lineHeight: 12,
+    marginTop: 1,
   },
   cardActivityTime: {
     ...theme.typography.meta,
