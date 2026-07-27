@@ -76,6 +76,7 @@ import {
   MessageSquareText,
   Mic,
   MicOff,
+  Minus,
   MoreVertical,
   Moon,
   Pin,
@@ -89,6 +90,7 @@ import {
   Sun,
   Terminal,
   Trash2,
+  Type,
   Upload,
   X,
 } from "lucide-react-native";
@@ -148,6 +150,16 @@ import {
 import { LegacyIPadShortcutCapture } from "@/tmux-mobile/legacy-ipad-shortcut-capture";
 import { isRecentActivity, relativeTimeLabel } from "@/tmux-mobile/relative-time";
 import { sessionCardSummary } from "@/tmux-mobile/session-card";
+import {
+  FONT_SCALE_LABELS,
+  FONT_SCALE_LEVELS,
+  FONT_SCALE_STORAGE_KEY,
+  FONT_SCALE_VALUES,
+  readFontScaleLevel,
+  scaleTextMetrics,
+  stepFontScale,
+  type FontScaleLevel,
+} from "@/tmux-mobile/font-scale";
 import { useOtaUpdates, type OtaUpdateController, type OtaUpdateNotice } from "@/tmux-mobile/updates";
 import {
   normalizeSpokenControllerUrl,
@@ -287,9 +299,10 @@ type ResponsiveLayout = {
   sessionPillMaxWidth: number;
 };
 
-function createResponsiveLayout(width = 390, height = 844): ResponsiveLayout {
-  const isWide = width >= 760;
-  const listColumns = width >= 1180 ? 3 : width >= 760 ? 2 : 1;
+function createResponsiveLayout(width = 390, height = 844, fontScale = 1): ResponsiveLayout {
+  const effectiveWidth = width / fontScale;
+  const isWide = effectiveWidth >= 760;
+  const listColumns = effectiveWidth >= 1180 ? 3 : effectiveWidth >= 760 ? 2 : 1;
   const gutter = isWide ? 18 : 16;
   const contentMaxWidth = isWide ? Math.min(width - gutter * 2, 1240) : width;
   return {
@@ -300,7 +313,7 @@ function createResponsiveLayout(width = 390, height = 844): ResponsiveLayout {
     gutter,
     contentMaxWidth,
     sheetMaxWidth: isWide ? Math.min(width - gutter * 2, 760) : width,
-    menuWidth: isWide ? 300 : 226,
+    menuWidth: Math.min(width - gutter * 2, (isWide ? 300 : 226) * fontScale),
     cardPadding: isWide ? 16 : 14,
     sessionPillMaxWidth: isWide ? 176 : 132,
   };
@@ -312,6 +325,7 @@ type AppStyles = ReturnType<typeof createStyles>;
 const ThemeContext = React.createContext<AppTheme>(lightTheme);
 const StylesContext = React.createContext<AppStyles>(createStyles(lightTheme));
 const VisionControlsContext = React.createContext(false);
+const FontScaleContext = React.createContext(1);
 
 const PROMPT_SHORTCUTS = [
   { label: "Yes", text: "yes" },
@@ -444,6 +458,10 @@ function useAppStyles() {
 
 function useVisionControls() {
   return React.useContext(VisionControlsContext);
+}
+
+function useFontScale() {
+  return React.useContext(FontScaleContext);
 }
 
 function useFieldPresentation(field: VisionFieldId) {
@@ -721,6 +739,8 @@ function CommandCenterScreen() {
   const [themeMode, setThemeMode] = React.useState<ThemeMode>(
     systemScheme === "dark" ? "dark" : "light",
   );
+  const [fontScaleLevel, setFontScaleLevel] = React.useState<FontScaleLevel>("standard");
+  const [fontScaleLoaded, setFontScaleLoaded] = React.useState(false);
   const [visionControlsPreference, setVisionControlsPreference] =
     React.useState<VisionControlsPreference>("auto");
   const [visionControlsPreferenceLoaded, setVisionControlsPreferenceLoaded] = React.useState(false);
@@ -757,11 +777,15 @@ function CommandCenterScreen() {
   const copyResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copiedResponseKey, setCopiedResponseKey] = React.useState("");
   const theme = themeMode === "dark" ? darkTheme : lightTheme;
+  const fontScale = FONT_SCALE_VALUES[fontScaleLevel];
   const layout = React.useMemo(
-    () => createResponsiveLayout(windowWidth, windowHeight),
-    [windowHeight, windowWidth],
+    () => createResponsiveLayout(windowWidth, windowHeight, fontScale),
+    [fontScale, windowHeight, windowWidth],
   );
-  const styles = React.useMemo(() => createStyles(theme, layout), [layout, theme]);
+  const styles = React.useMemo(
+    () => createStyles(theme, layout, fontScale),
+    [fontScale, layout, theme],
+  );
   const relativeTimeNow = Date.now();
   const otaUpdates = useOtaUpdates();
   const visionControlsEnabled = resolveVisionControls(
@@ -780,6 +804,21 @@ function CommandCenterScreen() {
         if (mounted && (value === "light" || value === "dark")) setThemeMode(value);
       })
       .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(FONT_SCALE_STORAGE_KEY)
+      .then((value) => {
+        if (mounted) setFontScaleLevel(readFontScaleLevel(value));
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (mounted) setFontScaleLoaded(true);
+      });
     return () => {
       mounted = false;
     };
@@ -821,6 +860,12 @@ function CommandCenterScreen() {
     },
     [],
   );
+
+  const updateFontScaleLevel = React.useCallback((next: FontScaleLevel) => {
+    setFontScaleLevel(next);
+    AsyncStorage.setItem(FONT_SCALE_STORAGE_KEY, next).catch(() => {});
+    void Haptics.selectionAsync();
+  }, []);
 
   const rawMachines = commandCenter.data?.machines || EMPTY_MACHINES;
   const machines = React.useMemo(
@@ -1395,16 +1440,18 @@ function CommandCenterScreen() {
     (node: React.ReactNode) => (
       <ThemeContext.Provider value={theme}>
         <StylesContext.Provider value={styles}>
-          <VisionControlsContext.Provider value={visionControlsEnabled}>
-            {node}
-          </VisionControlsContext.Provider>
+          <FontScaleContext.Provider value={fontScale}>
+            <VisionControlsContext.Provider value={visionControlsEnabled}>
+              {node}
+            </VisionControlsContext.Provider>
+          </FontScaleContext.Provider>
         </StylesContext.Provider>
       </ThemeContext.Provider>
     ),
-    [styles, theme, visionControlsEnabled],
+    [fontScale, styles, theme, visionControlsEnabled],
   );
 
-  if (auth.loading || !visionControlsPreferenceLoaded) {
+  if (auth.loading || !fontScaleLoaded || !visionControlsPreferenceLoaded) {
     return withTheme(
       <View style={[styles.center, { backgroundColor: theme.colors.background }]}>
         <ActivityIndicator color={theme.colors.accent} />
@@ -1652,6 +1699,8 @@ function CommandCenterScreen() {
       <SettingsModal
         visible={settingsVisible}
         ota={otaUpdates}
+        fontScaleLevel={fontScaleLevel}
+        onFontScaleLevelChange={updateFontScaleLevel}
         visionControlsPreference={visionControlsPreference}
         visionDetected={NATIVE_VISION_CONTROLS_DETECTED}
         onVisionControlsPreferenceChange={updateVisionControlsPreference}
@@ -2786,6 +2835,8 @@ function UpdateNoticeBanner({
 function SettingsModal({
   visible,
   ota,
+  fontScaleLevel,
+  onFontScaleLevelChange,
   visionControlsPreference,
   visionDetected,
   onVisionControlsPreferenceChange,
@@ -2793,6 +2844,8 @@ function SettingsModal({
 }: {
   visible: boolean;
   ota: OtaUpdateController;
+  fontScaleLevel: FontScaleLevel;
+  onFontScaleLevelChange: (value: FontScaleLevel) => void;
   visionControlsPreference: VisionControlsPreference;
   visionDetected: boolean;
   onVisionControlsPreferenceChange: (value: VisionControlsPreference) => void;
@@ -2800,6 +2853,9 @@ function SettingsModal({
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const fontScaleLevelIndex = FONT_SCALE_LEVELS.indexOf(fontScaleLevel);
+  const canDecreaseFontScale = fontScaleLevelIndex > 0;
+  const canIncreaseFontScale = fontScaleLevelIndex < FONT_SCALE_LEVELS.length - 1;
   const statusIcon = ota.isReady ? (
     <CheckCircle size={20} color={theme.colors.success} />
   ) : ota.phase === "error" ? (
@@ -2849,6 +2905,60 @@ function SettingsModal({
           </Pressable>
         </View>
       </View>
+
+      {Platform.OS === "ios" ? (
+        <View style={styles.settingsSection}>
+          <View style={styles.settingsSectionHeader}>
+            <Type size={16} color={theme.colors.textMuted} />
+            <Text style={styles.settingsSectionTitle}>Text size</Text>
+          </View>
+          <Text style={styles.settingsSectionDescription}>
+            Changes text throughout cards, controls, transcripts, composers, and terminals.
+          </Text>
+          <View style={styles.fontScaleRow}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Decrease text size"
+              accessibilityState={{ disabled: !canDecreaseFontScale }}
+              disabled={!canDecreaseFontScale}
+              style={[
+                styles.fontScaleButton,
+                !canDecreaseFontScale ? styles.disabledButton : null,
+              ]}
+              onPress={() => onFontScaleLevelChange(stepFontScale(fontScaleLevel, -1))}
+            >
+              <Type size={15} color={theme.colors.text} />
+              <Minus size={14} color={theme.colors.text} />
+            </Pressable>
+            <View
+              accessibilityRole="text"
+              accessibilityLabel={`Text size ${FONT_SCALE_LABELS[fontScaleLevel]}`}
+              style={styles.fontScaleValue}
+            >
+              <Text style={styles.fontScaleValueTitle}>
+                {FONT_SCALE_LABELS[fontScaleLevel]}
+              </Text>
+              <Text style={styles.fontScaleValueMeta}>
+                {Math.round(FONT_SCALE_VALUES[fontScaleLevel] * 100)}%
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Increase text size"
+              accessibilityState={{ disabled: !canIncreaseFontScale }}
+              disabled={!canIncreaseFontScale}
+              style={[
+                styles.fontScaleButton,
+                !canIncreaseFontScale ? styles.disabledButton : null,
+              ]}
+              onPress={() => onFontScaleLevelChange(stepFontScale(fontScaleLevel, 1))}
+            >
+              <Type size={20} color={theme.colors.text} />
+              <Plus size={14} color={theme.colors.text} />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.settingsSection}>
         <View style={styles.settingsSectionHeader}>
@@ -4569,6 +4679,7 @@ function EmbeddedSshModal({
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const fontScale = useFontScale();
   const visionControls = useVisionControls();
   const api = useTmuxMobileApi();
   const { width: windowWidth } = useWindowDimensions();
@@ -4594,7 +4705,7 @@ function EmbeddedSshModal({
   const routedMachineId = String(target?.machineId || "");
   const targetHost = target?.machineHostname || "";
   const profileKey = target ? sshProfileStorageKey(controllerUrl, machineId) : "";
-  const isWide = windowWidth >= 760;
+  const isWide = windowWidth / fontScale >= 760;
   const deviceLabel =
     Constants.deviceName ||
     (Platform.OS === "ios" && Platform.isPad ? "CJMUX on iPad" : "CJMUX on iPhone");
@@ -5217,7 +5328,7 @@ function EmbeddedSshModal({
           connectionKey={`${profileKey}:${connectionGeneration}`}
           autoFocus={Platform.OS === "ios" && Platform.isPad && !visionControls}
           colorScheme={theme.dark ? "dark" : "light"}
-          fontSize={isWide ? 14 : 13}
+          fontSize={(isWide ? 14 : 13) * fontScale}
           onStateChange={({ nativeEvent }) => {
             setConnectionState(nativeEvent.state);
             setConnectionMessage(nativeEvent.message || "");
@@ -5821,10 +5932,14 @@ function ResponseModal({
   const api = useTmuxMobileApi();
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const fontScale = useFontScale();
   const pinArtifact = usePinInlineArtifact();
   const [pinStatus, setPinStatus] = React.useState("");
   const text = target?.lastAssistantText || "";
-  const markdownStyle = React.useMemo(() => createMarkdownStyles(theme), [theme]);
+  const markdownStyle = React.useMemo(
+    () => createMarkdownStyles(theme, fontScale),
+    [fontScale, theme],
+  );
   const openAgentFile = React.useCallback(
     (path: string) => {
       if (!target) return;
@@ -5962,12 +6077,16 @@ function FilePreviewModal({
   const api = useTmuxMobileApi();
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const fontScale = useFontScale();
   const pinFile = usePinFileArtifact();
   const [data, setData] = React.useState<AgentFileResponse | null>(null);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
   const [loading, setLoading] = React.useState(false);
-  const markdownStyle = React.useMemo(() => createMarkdownStyles(theme), [theme]);
+  const markdownStyle = React.useMemo(
+    () => createMarkdownStyles(theme, fontScale),
+    [fontScale, theme],
+  );
   const markdownRules = React.useMemo(
     () =>
       createMarkdownPathRules((path) => {
@@ -6176,6 +6295,7 @@ function TranscriptModal({
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const fontScale = useFontScale();
   const api = useTmuxMobileApi();
   const pinArtifact = usePinInlineArtifact();
   const transcriptScrollRef = React.useRef<ScrollView | null>(null);
@@ -6184,7 +6304,10 @@ function TranscriptModal({
   const [pinStatus, setPinStatus] = React.useState("");
   const [pinningTurn, setPinningTurn] = React.useState<number | null>(null);
   const [loading, setLoading] = React.useState(false);
-  const markdownStyle = React.useMemo(() => createMarkdownStyles(theme), [theme]);
+  const markdownStyle = React.useMemo(
+    () => createMarkdownStyles(theme, fontScale),
+    [fontScale, theme],
+  );
   const scrollTranscriptToBottom = React.useCallback(() => {
     requestAnimationFrame(() => {
       transcriptScrollRef.current?.scrollToEnd({ animated: false });
@@ -6941,6 +7064,7 @@ function SheetModal({
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const fontScale = useFontScale();
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [keyboardHeight, setKeyboardHeight] = React.useState(0);
@@ -6966,7 +7090,8 @@ function SheetModal({
       const reportedHeight = Math.max(0, Math.min(windowHeight, frameHeight));
       const nextHeight = overlapHeight || reportedHeight;
       const implausibleWideFrame =
-        windowWidth >= 760 && (screenY <= 0 || nextHeight > windowHeight * 0.58);
+        windowWidth / fontScale >= 760 &&
+        (screenY <= 0 || nextHeight > windowHeight * 0.58);
       setKeyboardHeight(implausibleWideFrame ? 0 : nextHeight);
     };
     const clearKeyboardHeight = () => setKeyboardHeight(0);
@@ -6983,7 +7108,7 @@ function SheetModal({
     return () => {
       subscriptions.forEach((subscription) => subscription.remove());
     };
-  }, [visible, windowHeight, windowWidth]);
+  }, [fontScale, visible, windowHeight, windowWidth]);
 
   const sheetGestureStyle = React.useMemo(
     () => ({
@@ -7044,7 +7169,7 @@ function SheetModal({
     [closeSheet, dragY, resetDrag],
   );
 
-  const sheetIsWide = windowWidth >= 760;
+  const sheetIsWide = windowWidth / fontScale >= 760;
   const fullscreenActive = Boolean(fullscreen || (fullscreenOnWide && sheetIsWide));
   const keyboardAffectsSheet = fullscreenActive || !sheetIsWide || !tall;
   const keyboardOffset = visible && keyboardAffectsSheet ? keyboardHeight : 0;
@@ -7156,10 +7281,10 @@ function SheetModal({
   );
 }
 
-function createMarkdownStyles(theme: AppTheme) {
+function createMarkdownStyles(theme: AppTheme, fontScale = 1) {
   const codeSurface = theme.dark ? "#141312" : "#f1efe6";
   const blockquoteSurface = theme.dark ? "#23211d" : "#f0eee4";
-  return {
+  const definitions = {
     body: {
       minWidth: 0,
       ...theme.typography.body,
@@ -7330,9 +7455,14 @@ function createMarkdownStyles(theme: AppTheme) {
       padding: 6,
     },
   } as const;
+  return scaleTextMetrics(definitions, fontScale);
 }
 
-function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT) {
+function createStyles(
+  theme: AppTheme,
+  layout: ResponsiveLayout = DEFAULT_LAYOUT,
+  fontScale = 1,
+) {
   const columnGap = layout.isWide ? 14 : 12;
   const listInnerWidth = Math.max(0, layout.contentMaxWidth - layout.gutter * 2);
   const cardGridMaxWidth =
@@ -7340,7 +7470,7 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
       ? Math.floor((listInnerWidth - columnGap * (layout.listColumns - 1)) / layout.listColumns)
       : undefined;
 
-  return StyleSheet.create({
+  const definitions = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: theme.colors.background,
@@ -7987,6 +8117,49 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     minWidth: 0,
     ...theme.typography.meta,
     color: theme.colors.textMuted,
+  },
+  fontScaleRow: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 8,
+  },
+  fontScaleButton: {
+    width: 64,
+    minHeight: 56,
+    flexShrink: 0,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+  },
+  fontScaleValue: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 56,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  fontScaleValueTitle: {
+    ...theme.typography.section,
+    color: theme.colors.accent,
+    textAlign: "center",
+  },
+  fontScaleValueMeta: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    textAlign: "center",
   },
   visionPreferenceRow: {
     width: "100%",
@@ -9481,4 +9654,5 @@ function createStyles(theme: AppTheme, layout: ResponsiveLayout = DEFAULT_LAYOUT
     justifyContent: "center",
   },
   });
+  return scaleTextMetrics(definitions, fontScale);
 }
