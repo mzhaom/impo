@@ -52,5 +52,10 @@ describe("terminal draft clear action", () => {
       "const singleShellExpandedHeight = Math.max(180, Math.round(viewportHeight * 0.5))",
     );
     expect(appSource).toContain("? { height: singleShellExpandedHeight }");
+    expect(appSource).toContain("<Maximize2 size={17} color={theme.colors.text} />");
+    expect(appSource).toContain("<Minimize2 size={17} color={activeIconColor} />");
+    expect(appSource).toContain(
+      "showShortcuts\n        autoFocus={terminalAutoFocus}\n        status=",
+    );
   });
 });

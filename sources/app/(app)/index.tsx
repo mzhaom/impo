@@ -76,6 +76,7 @@ import {
   MessageSquareText,
   Mic,
   MicOff,
+  Minimize2,
   Minus,
   MoreVertical,
   Moon,
@@ -3733,7 +3734,7 @@ function PaneComposer({
   showShortcuts?: boolean;
   autoFocus?: boolean;
   multiline?: boolean;
-  placeholder: string;
+  placeholder?: string;
   status?: string;
   error?: string;
   retryLabel?: string;
@@ -4025,10 +4026,11 @@ function PaneComposer({
         void Haptics.selectionAsync();
       }}
     >
-      <MessageSquareText
-        size={16}
-        color={singleShellPromptsVisible ? activeIconColor : theme.colors.text}
-      />
+      {singleShellPromptsVisible ? (
+        <Minimize2 size={17} color={activeIconColor} />
+      ) : (
+        <Maximize2 size={17} color={theme.colors.text} />
+      )}
     </Pressable>
   ) : null;
 
@@ -6004,7 +6006,6 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         showUpload
         showShortcuts
         autoFocus={terminalAutoFocus}
-        placeholder="Type a prompt, command, or note..."
         status={status || uploadFile.error?.message || ""}
         error={error}
         retryLabel="Retry send"
