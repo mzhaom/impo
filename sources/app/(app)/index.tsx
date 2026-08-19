@@ -3685,7 +3685,8 @@ function PaneComposer({
   onOpenUpload,
   onShortcut,
   onClear,
-  clearBelowInput = false,
+  clearInline = false,
+  singleShell = false,
   onRetry,
   recognizing = false,
   voiceRecording,
@@ -3717,7 +3718,8 @@ function PaneComposer({
   onOpenUpload?: () => void;
   onShortcut?: (value: string) => void;
   onClear?: () => void;
-  clearBelowInput?: boolean;
+  clearInline?: boolean;
+  singleShell?: boolean;
   onRetry?: () => void;
   recognizing?: boolean;
   voiceRecording?: boolean;
@@ -3743,6 +3745,7 @@ function PaneComposer({
   const styles = useAppStyles();
   const visionControls = useVisionControls();
   const expanded = variant === "expanded";
+  const usesSingleShell = expanded && singleShell;
   const busy = sendBusy || keyBusy || uploadBusy;
   const controlDisabled = disabled || busy;
   const sendIsDisabled = disabled || sendDisabled || sendBusy || keyBusy;
@@ -3884,6 +3887,7 @@ function PaneComposer({
         styles.paneComposerInput,
         expanded ? styles.paneComposerInputExpanded : styles.paneComposerInputCompact,
         expanded ? styles.paneComposerInputEmbedded : null,
+        usesSingleShell ? styles.paneComposerInputSingleShell : null,
       ]}
       placeholder={placeholder}
       placeholderTextColor={theme.colors.textMuted}
@@ -3909,6 +3913,86 @@ function PaneComposer({
       )}
     </Pressable>
   );
+
+  const clearButton =
+    expanded && clearInline && showClear ? (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Clear terminal input"
+        style={[
+          styles.paneComposerInlineButton,
+          value.length === 0 || standardVoiceActive ? styles.disabledButton : null,
+        ]}
+        disabled={disabled || value.length === 0 || standardVoiceActive}
+        onPress={() => {
+          onClear?.();
+          void Haptics.selectionAsync();
+        }}
+      >
+        <X
+          size={16}
+          color={value.length === 0 ? theme.colors.textMuted : theme.colors.text}
+        />
+      </Pressable>
+    ) : null;
+
+  const shortcutsBar = presentation.showShortcuts ? (
+    <View style={[styles.snippetBar, usesSingleShell ? styles.snippetBarEmbedded : null]}>
+      <ScrollView
+        horizontal
+        style={styles.snippetScroll}
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.snippetScrollContent}
+      >
+        {snippetItems.map((shortcut, index) => (
+          <Pressable
+            key={`${shortcut.text}-${index}`}
+            style={[
+              styles.shortcutChip,
+              standardVoiceActive ? styles.disabledButton : null,
+            ]}
+            disabled={disabled || standardVoiceActive}
+            onPress={() => {
+              onShortcut?.(shortcut.text);
+              void Haptics.selectionAsync();
+            }}
+          >
+            <Text style={styles.shortcutText} numberOfLines={1}>
+              {composerSnippetLabel(shortcut.text)}
+            </Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+      {showClear && !clearInline ? (
+        <Pressable
+          accessibilityLabel="Clear terminal input"
+          style={[
+            styles.snippetIconButton,
+            value.length === 0 || standardVoiceActive ? styles.disabledButton : null,
+          ]}
+          disabled={disabled || value.length === 0 || standardVoiceActive}
+          onPress={() => {
+            onClear?.();
+            void Haptics.selectionAsync();
+          }}
+        >
+          <X size={15} color={value.length === 0 ? theme.colors.textMuted : theme.colors.text} />
+        </Pressable>
+      ) : null}
+      <Pressable
+        accessibilityLabel="Manage shortcuts"
+        style={[
+          styles.snippetIconButton,
+          snippets.isFetching || standardVoiceActive ? styles.disabledButton : null,
+        ]}
+        disabled={disabled || standardVoiceActive}
+        onPress={openSnippetManager}
+      >
+        <ListPlus size={16} color={theme.colors.text} />
+      </Pressable>
+    </View>
+  ) : null;
 
   if (visionControls) {
     return (
@@ -4088,97 +4172,36 @@ function PaneComposer({
   }
 
   return (
-    <View style={styles.paneComposer}>
-      {presentation.showShortcuts ? (
-        <View style={styles.snippetBar}>
-          <ScrollView
-            horizontal
-            style={styles.snippetScroll}
-            showsHorizontalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.snippetScrollContent}
-          >
-            {snippetItems.map((shortcut, index) => (
-              <Pressable
-                key={`${shortcut.text}-${index}`}
-                style={[
-                  styles.shortcutChip,
-                  standardVoiceActive ? styles.disabledButton : null,
-                ]}
-                disabled={disabled || standardVoiceActive}
-                onPress={() => {
-                  onShortcut?.(shortcut.text);
-                  void Haptics.selectionAsync();
-                }}
-              >
-                <Text style={styles.shortcutText} numberOfLines={1}>
-                  {composerSnippetLabel(shortcut.text)}
-                </Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-          {showClear && !clearBelowInput ? (
-            <Pressable
-              style={[
-                styles.snippetIconButton,
-                value.length === 0 || standardVoiceActive ? styles.disabledButton : null,
-              ]}
-              disabled={disabled || value.length === 0 || standardVoiceActive}
-              onPress={() => {
-                onClear?.();
-                void Haptics.selectionAsync();
-              }}
-            >
-              <X size={15} color={value.length === 0 ? theme.colors.textMuted : theme.colors.text} />
-            </Pressable>
-          ) : null}
-          <Pressable
-            accessibilityLabel="Manage shortcuts"
-            style={[
-              styles.snippetIconButton,
-              snippets.isFetching || standardVoiceActive ? styles.disabledButton : null,
-            ]}
-            disabled={disabled || standardVoiceActive}
-            onPress={openSnippetManager}
-          >
-            <ListPlus size={16} color={theme.colors.text} />
-          </Pressable>
-        </View>
-      ) : null}
+    <View style={[styles.paneComposer, usesSingleShell ? styles.paneComposerSingleShell : null]}>
+      {!usesSingleShell ? shortcutsBar : null}
       {expanded ? (
         <>
-          <View style={styles.paneComposerInputShell}>
+          <View
+            style={[
+              styles.paneComposerInputShell,
+              usesSingleShell ? styles.paneComposerInputShellSingle : null,
+            ]}
+          >
+            {usesSingleShell ? shortcutsBar : null}
             {input}
-            <View style={styles.paneComposerInlineActions}>
+            {usesSingleShell && (standardStatus || error) ? (
+              <Text style={styles.paneComposerEmbeddedStatus} numberOfLines={1}>
+                {standardStatus || error}
+              </Text>
+            ) : null}
+            <View
+              style={[
+                styles.paneComposerInlineActions,
+                usesSingleShell ? styles.paneComposerInlineActionsSingle : null,
+              ]}
+            >
               {uploadButton}
               {keysButton}
+              {clearButton}
               {sendButton}
             </View>
           </View>
-          {showClear && clearBelowInput ? (
-            <View style={styles.paneComposerBelowInputActions}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Clear terminal input"
-                style={[
-                  styles.paneComposerClearButton,
-                  value.length === 0 || standardVoiceActive ? styles.disabledButton : null,
-                ]}
-                disabled={value.length === 0 || standardVoiceActive}
-                onPress={() => {
-                  onClear?.();
-                  void Haptics.selectionAsync();
-                }}
-              >
-                <X
-                  size={15}
-                  color={value.length === 0 ? theme.colors.textMuted : theme.colors.text}
-                />
-                <Text style={styles.paneComposerClearButtonText}>Clear input</Text>
-              </Pressable>
-            </View>
-          ) : null}
-          {reserveStatusSpace || standardStatus || error ? (
+          {!usesSingleShell && (reserveStatusSpace || standardStatus || error) ? (
             <Text style={styles.paneComposerStatus} numberOfLines={1}>
               {standardStatus || error || ""}
             </Text>
@@ -5921,7 +5944,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           setError("");
           terminalInputRef.current = "";
         }}
-        clearBelowInput
+        clearInline
+        singleShell={windowWidth < 760}
         onRetry={() => sendTerminalInput({ submit: true })}
         recognizing={terminalVoiceInput.active}
         voiceRecording={terminalVoiceInput.recording}
@@ -8778,6 +8802,9 @@ function createStyles(
     minWidth: 0,
     gap: 10,
   },
+  paneComposerSingleShell: {
+    gap: 6,
+  },
   visionPaneComposer: {
     width: "100%",
     minWidth: 0,
@@ -8964,6 +8991,9 @@ function createStyles(
     backgroundColor: theme.colors.surfaceRaised,
     overflow: "hidden",
   },
+  paneComposerInputShellSingle: {
+    minHeight: 108,
+  },
   paneComposerInput: {
     flex: 1,
     minWidth: 0,
@@ -8989,6 +9019,11 @@ function createStyles(
     minHeight: 132,
     paddingVertical: 10,
     textAlignVertical: "top",
+  },
+  paneComposerInputSingleShell: {
+    minHeight: 108,
+    paddingTop: 40,
+    paddingBottom: 50,
   },
   paneComposerIconButton: {
     width: 44,
@@ -9028,27 +9063,18 @@ function createStyles(
     alignItems: "center",
     gap: 7,
   },
-  paneComposerBelowInputActions: {
-    width: "100%",
-    minWidth: 0,
-    flexDirection: "row",
-    alignItems: "center",
+  paneComposerInlineActionsSingle: {
+    right: 6,
+    bottom: 6,
+    gap: 6,
   },
-  paneComposerClearButton: {
-    minHeight: 40,
-    paddingHorizontal: 12,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceRaised,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-  },
-  paneComposerClearButtonText: {
+  paneComposerEmbeddedStatus: {
+    position: "absolute",
+    left: 8,
+    right: 206,
+    bottom: 20,
     ...theme.typography.meta,
-    color: theme.colors.text,
+    color: theme.colors.textMuted,
   },
   paneComposerInlineButton: {
     width: 44,
@@ -9154,6 +9180,16 @@ function createStyles(
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+  },
+  snippetBarEmbedded: {
+    position: "absolute",
+    width: "auto",
+    top: 5,
+    right: 6,
+    left: 6,
+    zIndex: 1,
+    minHeight: 34,
+    gap: 6,
   },
   snippetScroll: {
     flex: 1,

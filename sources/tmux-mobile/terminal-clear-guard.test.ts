@@ -8,21 +8,29 @@ const appSource = fs.readFileSync(
 );
 
 describe("terminal draft clear action", () => {
-  it("puts an explicit local clear action below the terminal input", () => {
-    expect(appSource).toContain("clearBelowInput = false");
-    expect(appSource).toContain("showClear && clearBelowInput");
+  it("puts the local clear action beside the existing inline terminal buttons", () => {
+    expect(appSource).toContain("clearInline = false");
+    expect(appSource).toContain("{clearButton}");
     expect(appSource).toContain('accessibilityLabel="Clear terminal input"');
-    expect(appSource).toContain("<Text style={styles.paneComposerClearButtonText}>Clear input</Text>");
-    expect(appSource).toMatch(/terminalInputRef\.current = "";\s*}\}\s*clearBelowInput/);
+    expect(appSource).toMatch(/terminalInputRef\.current = "";\s*}\}\s*clearInline/);
+    expect(appSource).not.toContain("paneComposerBelowInputActions");
   });
 
   it("keeps clear local and available while a send request is pending", () => {
     const clearButton = appSource.match(
-      /accessibilityLabel="Clear terminal input"[\s\S]*?<Text style=\{styles\.paneComposerClearButtonText\}>Clear input<\/Text>/,
+      /const clearButton =[\s\S]*?accessibilityLabel="Clear terminal input"[\s\S]*?<\/Pressable>/,
     )?.[0];
     expect(clearButton).toBeTruthy();
     expect(clearButton).not.toContain("sendBusy");
     expect(clearButton).not.toContain("onSend");
     expect(clearButton).not.toContain("api.");
+  });
+
+  it("collapses the phone terminal controls into one input shell", () => {
+    expect(appSource).toContain("singleShell={windowWidth < 760}");
+    expect(appSource).toContain("{usesSingleShell ? shortcutsBar : null}");
+    expect(appSource).toMatch(/paneComposerInputShellSingle:\s*\{\s*minHeight: 108,/);
+    expect(appSource).toContain("usesSingleShell && (standardStatus || error)");
+    expect(appSource).toMatch(/paneComposerInlineButton:\s*\{\s*width: 44,\s*height: 44,/);
   });
 });
