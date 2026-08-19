@@ -153,6 +153,7 @@ import {
   sessionCardSummary,
   sessionModelLabel,
 } from "@/tmux-mobile/session-card";
+import { nextTerminalFollowState } from "@/tmux-mobile/terminal-follow";
 import {
   FONT_SCALE_LABELS,
   FONT_SCALE_LEVELS,
@@ -5379,6 +5380,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const sendKey = useSendKey();
   const uploadFile = useUploadFile();
   const paneTailScrollRef = React.useRef<ScrollView | null>(null);
+  const terminalUserScrollingRef = React.useRef(false);
   const pollingRef = React.useRef(false);
   const terminalInputRef = React.useRef("");
   const terminalDirectSendQueueRef = React.useRef<Promise<unknown>>(Promise.resolve());
@@ -5495,6 +5497,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
         .catch(() => {})
         .then(action)
         .then(() => {
+          setTerminalFollow(true);
           setError("");
           scheduleTerminalRefresh();
         })
@@ -5567,6 +5570,15 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
 
   const terminalNodes = React.useMemo(() => renderAnsiText(terminalText), [terminalText]);
   const terminalShouldFollow = terminalFollow;
+  const updateTerminalFollowFromScroll = React.useCallback((metrics: {
+    offsetY: number;
+    viewportHeight: number;
+    contentHeight: number;
+  }) => {
+    setTerminalFollow((following) =>
+      nextTerminalFollowState(following, metrics, terminalUserScrollingRef.current),
+    );
+  }, []);
   const scrollPaneTailToEnd = React.useCallback((animated = false) => {
     requestAnimationFrame(() => {
       paneTailScrollRef.current?.scrollToEnd({ animated });
@@ -5684,6 +5696,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   }, [uploadTerminalAssets]);
 
   const afterTerminalSend = React.useCallback(() => {
+    setTerminalFollow(true);
     setError("");
     setStatus("Sent");
     setTimeout(() => {
@@ -5823,8 +5836,35 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           if (terminalShouldFollow) scrollPaneTailToEnd(false);
         }}
         onScrollBeginDrag={() => {
-          setTerminalFollow(false);
+          terminalUserScrollingRef.current = true;
         }}
+        onScroll={({ nativeEvent }) => {
+          updateTerminalFollowFromScroll({
+            offsetY: nativeEvent.contentOffset.y,
+            viewportHeight: nativeEvent.layoutMeasurement.height,
+            contentHeight: nativeEvent.contentSize.height,
+          });
+        }}
+        onScrollEndDrag={({ nativeEvent }) => {
+          updateTerminalFollowFromScroll({
+            offsetY: nativeEvent.contentOffset.y,
+            viewportHeight: nativeEvent.layoutMeasurement.height,
+            contentHeight: nativeEvent.contentSize.height,
+          });
+          terminalUserScrollingRef.current = false;
+        }}
+        onMomentumScrollBegin={() => {
+          terminalUserScrollingRef.current = true;
+        }}
+        onMomentumScrollEnd={({ nativeEvent }) => {
+          updateTerminalFollowFromScroll({
+            offsetY: nativeEvent.contentOffset.y,
+            viewportHeight: nativeEvent.layoutMeasurement.height,
+            contentHeight: nativeEvent.contentSize.height,
+          });
+          terminalUserScrollingRef.current = false;
+        }}
+        scrollEventThrottle={16}
         keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
         keyboardShouldPersistTaps="handled"
       >
