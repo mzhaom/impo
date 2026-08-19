@@ -3685,6 +3685,7 @@ function PaneComposer({
   onOpenUpload,
   onShortcut,
   onClear,
+  clearBelowInput = false,
   onRetry,
   recognizing = false,
   voiceRecording,
@@ -3716,6 +3717,7 @@ function PaneComposer({
   onOpenUpload?: () => void;
   onShortcut?: (value: string) => void;
   onClear?: () => void;
+  clearBelowInput?: boolean;
   onRetry?: () => void;
   recognizing?: boolean;
   voiceRecording?: boolean;
@@ -4115,7 +4117,7 @@ function PaneComposer({
               </Pressable>
             ))}
           </ScrollView>
-          {showClear ? (
+          {showClear && !clearBelowInput ? (
             <Pressable
               style={[
                 styles.snippetIconButton,
@@ -4153,6 +4155,29 @@ function PaneComposer({
               {sendButton}
             </View>
           </View>
+          {showClear && clearBelowInput ? (
+            <View style={styles.paneComposerBelowInputActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Clear terminal input"
+                style={[
+                  styles.paneComposerClearButton,
+                  value.length === 0 || standardVoiceActive ? styles.disabledButton : null,
+                ]}
+                disabled={value.length === 0 || standardVoiceActive}
+                onPress={() => {
+                  onClear?.();
+                  void Haptics.selectionAsync();
+                }}
+              >
+                <X
+                  size={15}
+                  color={value.length === 0 ? theme.colors.textMuted : theme.colors.text}
+                />
+                <Text style={styles.paneComposerClearButtonText}>Clear input</Text>
+              </Pressable>
+            </View>
+          ) : null}
           {reserveStatusSpace || standardStatus || error ? (
             <Text style={styles.paneComposerStatus} numberOfLines={1}>
               {standardStatus || error || ""}
@@ -5896,6 +5921,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           setError("");
           terminalInputRef.current = "";
         }}
+        clearBelowInput
         onRetry={() => sendTerminalInput({ submit: true })}
         recognizing={terminalVoiceInput.active}
         voiceRecording={terminalVoiceInput.recording}
@@ -9001,6 +9027,28 @@ function createStyles(
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
+  },
+  paneComposerBelowInputActions: {
+    width: "100%",
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  paneComposerClearButton: {
+    minHeight: 40,
+    paddingHorizontal: 12,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  paneComposerClearButtonText: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
   },
   paneComposerInlineButton: {
     width: 44,
