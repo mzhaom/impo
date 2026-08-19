@@ -3743,6 +3743,7 @@ function PaneComposer({
 }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const { height: viewportHeight } = useWindowDimensions();
   const visionControls = useVisionControls();
   const expanded = variant === "expanded";
   const usesSingleShell = expanded && singleShell;
@@ -3774,6 +3775,7 @@ function PaneComposer({
   const [visionMoreVisible, setVisionMoreVisible] = React.useState(false);
   const [singleShellPromptsExpanded, setSingleShellPromptsExpanded] = React.useState(false);
   const singleShellPromptsVisible = usesSingleShell && singleShellPromptsExpanded;
+  const singleShellExpandedHeight = Math.max(180, Math.round(viewportHeight * 0.5));
   const snippetItems = React.useMemo(() => {
     const loaded = cleanSnippetItems(snippets.data?.items);
     return prioritizeGoalSnippet(
@@ -3964,7 +3966,6 @@ function PaneComposer({
             disabled={disabled || standardVoiceActive}
             onPress={() => {
               onShortcut?.(shortcut.text);
-              if (usesSingleShell) setSingleShellPromptsExpanded(false);
               void Haptics.selectionAsync();
             }}
           >
@@ -4007,7 +4008,11 @@ function PaneComposer({
   const promptToggleButton = usesSingleShell && presentation.showShortcuts ? (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={singleShellPromptsVisible ? "Hide prompt shortcuts" : "Show prompt shortcuts"}
+      accessibilityLabel={
+        singleShellPromptsVisible
+          ? "Collapse terminal composer"
+          : "Expand terminal composer and show prompt shortcuts"
+      }
       accessibilityState={{ expanded: singleShellPromptsVisible }}
       style={[
         styles.paneComposerInlineButton,
@@ -4213,8 +4218,10 @@ function PaneComposer({
             style={[
               styles.paneComposerInputShell,
               usesSingleShell ? styles.paneComposerInputShellSingle : null,
-              usesSingleShell && !singleShellPromptsVisible
-                ? styles.paneComposerInputShellSingleCollapsed
+              usesSingleShell
+                ? singleShellPromptsVisible
+                  ? { height: singleShellExpandedHeight }
+                  : styles.paneComposerInputShellSingleCollapsed
                 : null,
             ]}
           >

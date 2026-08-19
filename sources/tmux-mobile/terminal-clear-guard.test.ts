@@ -38,12 +38,19 @@ describe("terminal draft clear action", () => {
     expect(appSource).toContain(
       "const [singleShellPromptsExpanded, setSingleShellPromptsExpanded] = React.useState(false)",
     );
-    expect(appSource).toContain('"Show prompt shortcuts"');
-    expect(appSource).toContain('"Hide prompt shortcuts"');
+    expect(appSource).toContain('"Expand terminal composer and show prompt shortcuts"');
+    expect(appSource).toContain('"Collapse terminal composer"');
     expect(appSource).toContain("accessibilityState={{ expanded: singleShellPromptsVisible }}");
-    expect(appSource).toContain("if (usesSingleShell) setSingleShellPromptsExpanded(false)");
+    expect(appSource).not.toContain("if (usesSingleShell) setSingleShellPromptsExpanded(false)");
     expect(appSource).toMatch(
       /paneComposerInputShellSingleCollapsed:\s*\{\s*minHeight: 56,/,
     );
+  });
+
+  it("expands the composer to half the available screen for long drafts", () => {
+    expect(appSource).toContain(
+      "const singleShellExpandedHeight = Math.max(180, Math.round(viewportHeight * 0.5))",
+    );
+    expect(appSource).toContain("? { height: singleShellExpandedHeight }");
   });
 });
