@@ -5853,7 +5853,7 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           <X size={19} color={theme.colors.text} />
         </Pressable>
       </View>
-      {loading ? <ActivityIndicator /> : null}
+      {loading ? <ActivityIndicator color={theme.colors.accent} /> : null}
       <ScrollView
         ref={paneTailScrollRef}
         style={styles.terminalBox}
@@ -9597,13 +9597,13 @@ function createStyles(
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    backgroundColor: theme.dark ? "#0d0d0c" : "#272721",
+    backgroundColor: theme.dark ? "#0d0d0c" : theme.colors.surfaceRaised,
     padding: 12,
   },
   terminalText: {
     minWidth: 0,
     ...theme.typography.mono,
-    color: "#edece5",
+    color: theme.colors.text,
   },
   transcriptBox: {
     flex: 1,
