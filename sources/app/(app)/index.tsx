@@ -3772,6 +3772,8 @@ function PaneComposer({
   const [snippetDraftItems, setSnippetDraftItems] = React.useState<UserSnippetItem[]>([]);
   const [snippetNewText, setSnippetNewText] = React.useState("");
   const [visionMoreVisible, setVisionMoreVisible] = React.useState(false);
+  const [singleShellPromptsExpanded, setSingleShellPromptsExpanded] = React.useState(false);
+  const singleShellPromptsVisible = usesSingleShell && singleShellPromptsExpanded;
   const snippetItems = React.useMemo(() => {
     const loaded = cleanSnippetItems(snippets.data?.items);
     return prioritizeGoalSnippet(
@@ -3782,6 +3784,10 @@ function PaneComposer({
   React.useEffect(() => {
     if (!visionControls) setVisionMoreVisible(false);
   }, [visionControls]);
+
+  React.useEffect(() => {
+    if (!usesSingleShell || disabled) setSingleShellPromptsExpanded(false);
+  }, [disabled, usesSingleShell]);
 
   const openSnippetManager = React.useCallback(() => {
     setSnippetDraftItems(snippetItems);
@@ -3888,6 +3894,9 @@ function PaneComposer({
         expanded ? styles.paneComposerInputExpanded : styles.paneComposerInputCompact,
         expanded ? styles.paneComposerInputEmbedded : null,
         usesSingleShell ? styles.paneComposerInputSingleShell : null,
+        usesSingleShell && !singleShellPromptsVisible
+          ? styles.paneComposerInputSingleShellCollapsed
+          : null,
       ]}
       placeholder={placeholder}
       placeholderTextColor={theme.colors.textMuted}
@@ -3955,6 +3964,7 @@ function PaneComposer({
             disabled={disabled || standardVoiceActive}
             onPress={() => {
               onShortcut?.(shortcut.text);
+              if (usesSingleShell) setSingleShellPromptsExpanded(false);
               void Haptics.selectionAsync();
             }}
           >
@@ -3992,6 +4002,29 @@ function PaneComposer({
         <ListPlus size={16} color={theme.colors.text} />
       </Pressable>
     </View>
+  ) : null;
+
+  const promptToggleButton = usesSingleShell && presentation.showShortcuts ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={singleShellPromptsVisible ? "Hide prompt shortcuts" : "Show prompt shortcuts"}
+      accessibilityState={{ expanded: singleShellPromptsVisible }}
+      style={[
+        styles.paneComposerInlineButton,
+        singleShellPromptsVisible ? styles.paneComposerInlineButtonActive : null,
+        standardVoiceActive ? styles.disabledButton : null,
+      ]}
+      disabled={disabled || standardVoiceActive}
+      onPress={() => {
+        setSingleShellPromptsExpanded((current) => !current);
+        void Haptics.selectionAsync();
+      }}
+    >
+      <MessageSquareText
+        size={16}
+        color={singleShellPromptsVisible ? activeIconColor : theme.colors.text}
+      />
+    </Pressable>
   ) : null;
 
   if (visionControls) {
@@ -4180,9 +4213,12 @@ function PaneComposer({
             style={[
               styles.paneComposerInputShell,
               usesSingleShell ? styles.paneComposerInputShellSingle : null,
+              usesSingleShell && !singleShellPromptsVisible
+                ? styles.paneComposerInputShellSingleCollapsed
+                : null,
             ]}
           >
-            {usesSingleShell ? shortcutsBar : null}
+            {singleShellPromptsVisible ? shortcutsBar : null}
             {input}
             {usesSingleShell && (standardStatus || error) ? (
               <Text style={styles.paneComposerEmbeddedStatus} numberOfLines={1}>
@@ -4197,6 +4233,7 @@ function PaneComposer({
             >
               {uploadButton}
               {keysButton}
+              {promptToggleButton}
               {clearButton}
               {sendButton}
             </View>
@@ -5844,82 +5881,85 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
       hideHeader
     >
       {target ? <StatusBar hidden /> : null}
-      <View style={styles.terminalFullscreenControls}>
-        <Pressable
-          accessibilityRole="switch"
-          accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}
-          accessibilityState={{ checked: terminalFollow }}
-          style={[
-            styles.paneComposerFollowButton,
-            terminalFollow ? styles.paneComposerInlineButtonActive : null,
-          ]}
-          onPress={toggleTerminalFollow}
-        >
-          <ArrowDown
-            size={15}
-            color={terminalFollow ? theme.colors.accent : theme.colors.textMuted}
-          />
-          <Text
+      <View style={styles.terminalFrame}>
+        <View pointerEvents="box-none" style={styles.terminalFullscreenControls}>
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}
+            accessibilityState={{ checked: terminalFollow }}
+            hitSlop={6}
             style={[
-              styles.paneComposerFollowButtonText,
-              terminalFollow ? styles.paneComposerFollowButtonTextActive : null,
+              styles.terminalOverlayButton,
+              terminalFollow ? styles.terminalOverlayButtonActive : null,
             ]}
+            onPress={toggleTerminalFollow}
           >
-            {terminalFollow ? "Following" : "Follow"}
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityLabel="Close terminal"
-          style={styles.terminalCloseButton}
-          onPress={closeTerminalModal}
+            <ArrowDown
+              size={17}
+              color={terminalFollow ? theme.colors.accent : theme.colors.textMuted}
+            />
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Close terminal"
+            hitSlop={6}
+            style={styles.terminalOverlayButton}
+            onPress={closeTerminalModal}
+          >
+            <X size={17} color={theme.colors.text} />
+          </Pressable>
+        </View>
+        {loading ? (
+          <ActivityIndicator
+            pointerEvents="none"
+            style={styles.terminalLoadingIndicator}
+            color={theme.colors.accent}
+          />
+        ) : null}
+        <ScrollView
+          ref={paneTailScrollRef}
+          style={styles.terminalBox}
+          contentContainerStyle={styles.terminalBoxContent}
+          onContentSizeChange={() => {
+            if (terminalShouldFollow) scrollPaneTailToEnd(false);
+          }}
+          onScrollBeginDrag={() => {
+            terminalUserScrollingRef.current = true;
+          }}
+          onScroll={({ nativeEvent }) => {
+            updateTerminalFollowFromScroll({
+              offsetY: nativeEvent.contentOffset.y,
+              viewportHeight: nativeEvent.layoutMeasurement.height,
+              contentHeight: nativeEvent.contentSize.height,
+            });
+          }}
+          onScrollEndDrag={({ nativeEvent }) => {
+            updateTerminalFollowFromScroll({
+              offsetY: nativeEvent.contentOffset.y,
+              viewportHeight: nativeEvent.layoutMeasurement.height,
+              contentHeight: nativeEvent.contentSize.height,
+            });
+            terminalUserScrollingRef.current = false;
+          }}
+          onMomentumScrollBegin={() => {
+            terminalUserScrollingRef.current = true;
+          }}
+          onMomentumScrollEnd={({ nativeEvent }) => {
+            updateTerminalFollowFromScroll({
+              offsetY: nativeEvent.contentOffset.y,
+              viewportHeight: nativeEvent.layoutMeasurement.height,
+              contentHeight: nativeEvent.contentSize.height,
+            });
+            terminalUserScrollingRef.current = false;
+          }}
+          scrollEventThrottle={16}
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+          keyboardShouldPersistTaps="handled"
         >
-          <X size={19} color={theme.colors.text} />
-        </Pressable>
+          <Text accessibilityLabel="Terminal output" style={styles.terminalText}>
+            {terminalText ? terminalNodes : "No output."}
+          </Text>
+        </ScrollView>
       </View>
-      {loading ? <ActivityIndicator color={theme.colors.accent} /> : null}
-      <ScrollView
-        ref={paneTailScrollRef}
-        style={styles.terminalBox}
-        onContentSizeChange={() => {
-          if (terminalShouldFollow) scrollPaneTailToEnd(false);
-        }}
-        onScrollBeginDrag={() => {
-          terminalUserScrollingRef.current = true;
-        }}
-        onScroll={({ nativeEvent }) => {
-          updateTerminalFollowFromScroll({
-            offsetY: nativeEvent.contentOffset.y,
-            viewportHeight: nativeEvent.layoutMeasurement.height,
-            contentHeight: nativeEvent.contentSize.height,
-          });
-        }}
-        onScrollEndDrag={({ nativeEvent }) => {
-          updateTerminalFollowFromScroll({
-            offsetY: nativeEvent.contentOffset.y,
-            viewportHeight: nativeEvent.layoutMeasurement.height,
-            contentHeight: nativeEvent.contentSize.height,
-          });
-          terminalUserScrollingRef.current = false;
-        }}
-        onMomentumScrollBegin={() => {
-          terminalUserScrollingRef.current = true;
-        }}
-        onMomentumScrollEnd={({ nativeEvent }) => {
-          updateTerminalFollowFromScroll({
-            offsetY: nativeEvent.contentOffset.y,
-            viewportHeight: nativeEvent.layoutMeasurement.height,
-            contentHeight: nativeEvent.contentSize.height,
-          });
-          terminalUserScrollingRef.current = false;
-        }}
-        scrollEventThrottle={16}
-        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Text accessibilityLabel="Terminal output" style={styles.terminalText}>
-          {terminalText ? terminalNodes : "No output."}
-        </Text>
-      </ScrollView>
       <PaneComposer
         variant="expanded"
         value={terminalInput}
@@ -8994,6 +9034,9 @@ function createStyles(
   paneComposerInputShellSingle: {
     minHeight: 108,
   },
+  paneComposerInputShellSingleCollapsed: {
+    minHeight: 56,
+  },
   paneComposerInput: {
     flex: 1,
     minWidth: 0,
@@ -9024,6 +9067,12 @@ function createStyles(
     minHeight: 108,
     paddingTop: 40,
     paddingBottom: 50,
+  },
+  paneComposerInputSingleShellCollapsed: {
+    minHeight: 56,
+    paddingTop: 10,
+    paddingRight: 256,
+    paddingBottom: 10,
   },
   paneComposerIconButton: {
     width: 44,
@@ -9071,43 +9120,12 @@ function createStyles(
   paneComposerEmbeddedStatus: {
     position: "absolute",
     left: 8,
-    right: 206,
+    right: 256,
     bottom: 20,
     ...theme.typography.meta,
     color: theme.colors.textMuted,
   },
   paneComposerInlineButton: {
-    width: 44,
-    height: 44,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  paneComposerFollowButton: {
-    minWidth: 76,
-    minHeight: 44,
-    paddingHorizontal: 9,
-    alignSelf: "flex-start",
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
-  },
-  paneComposerFollowButtonText: {
-    ...theme.typography.meta,
-    color: theme.colors.textMuted,
-  },
-  paneComposerFollowButtonTextActive: {
-    color: theme.colors.accent,
-  },
-  terminalCloseButton: {
     width: 44,
     height: 44,
     borderRadius: theme.radii.lg,
@@ -9613,12 +9631,46 @@ function createStyles(
     textAlign: "center",
   },
   terminalFullscreenControls: {
-    width: "100%",
-    minWidth: 0,
+    position: "absolute",
+    top: 6,
+    right: 6,
+    zIndex: 2,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "flex-end",
-    gap: 8,
+    gap: 6,
+  },
+  terminalOverlayButton: {
+    width: 36,
+    height: 36,
+    borderRadius: theme.radii.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  terminalOverlayButtonActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
+  terminalFrame: {
+    position: "relative",
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.dark ? "#0d0d0c" : theme.colors.surfaceRaised,
+    overflow: "hidden",
+  },
+  terminalLoadingIndicator: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 1,
   },
   terminalStatusLine: {
     width: "100%",
@@ -9630,11 +9682,10 @@ function createStyles(
     flex: 1,
     minHeight: 0,
     minWidth: 0,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.dark ? "#0d0d0c" : theme.colors.surfaceRaised,
+  },
+  terminalBoxContent: {
     padding: 12,
+    paddingTop: 48,
   },
   terminalText: {
     minWidth: 0,

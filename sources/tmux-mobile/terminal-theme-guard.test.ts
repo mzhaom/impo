@@ -21,8 +21,7 @@ describe("terminal theme", () => {
   });
 
   it("keeps the terminal loading state visible in either theme", () => {
-    expect(appSource).toContain(
-      "{loading ? <ActivityIndicator color={theme.colors.accent} /> : null}",
-    );
+    expect(appSource).toContain("style={styles.terminalLoadingIndicator}");
+    expect(appSource).toContain("color={theme.colors.accent}");
   });
 });

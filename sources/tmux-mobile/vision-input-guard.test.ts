@@ -138,9 +138,13 @@ describe("Terminal fullscreen behavior", () => {
   });
 
   it("keeps only follow and close in the top-right terminal controls", () => {
+    expect(appSource).toContain("<View style={styles.terminalFrame}>");
     expect(appSource).toContain("style={styles.terminalFullscreenControls}");
+    expect(appSource).toContain("contentContainerStyle={styles.terminalBoxContent}");
     expect(appSource).toContain('accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}');
     expect(appSource).toContain('accessibilityLabel="Close terminal"');
+    expect(appSource).toContain("styles.terminalOverlayButton");
+    expect(appSource).not.toContain('{terminalFollow ? "Following" : "Follow"}');
     expect(appSource).toContain("onClose={closeTerminalModal}");
     expect(appSource).not.toContain("onCloseTerminal");
     expect(appSource).not.toContain("onToggleFollow");

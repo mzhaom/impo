@@ -28,9 +28,22 @@ describe("terminal draft clear action", () => {
 
   it("collapses the phone terminal controls into one input shell", () => {
     expect(appSource).toContain("singleShell={windowWidth < 760}");
-    expect(appSource).toContain("{usesSingleShell ? shortcutsBar : null}");
+    expect(appSource).toContain("{singleShellPromptsVisible ? shortcutsBar : null}");
     expect(appSource).toMatch(/paneComposerInputShellSingle:\s*\{\s*minHeight: 108,/);
     expect(appSource).toContain("usesSingleShell && (standardStatus || error)");
     expect(appSource).toMatch(/paneComposerInlineButton:\s*\{\s*width: 44,\s*height: 44,/);
+  });
+
+  it("keeps prompt chips collapsed until the phone user expands them", () => {
+    expect(appSource).toContain(
+      "const [singleShellPromptsExpanded, setSingleShellPromptsExpanded] = React.useState(false)",
+    );
+    expect(appSource).toContain('"Show prompt shortcuts"');
+    expect(appSource).toContain('"Hide prompt shortcuts"');
+    expect(appSource).toContain("accessibilityState={{ expanded: singleShellPromptsVisible }}");
+    expect(appSource).toContain("if (usesSingleShell) setSingleShellPromptsExpanded(false)");
+    expect(appSource).toMatch(
+      /paneComposerInputShellSingleCollapsed:\s*\{\s*minHeight: 56,/,
+    );
   });
 });
