@@ -2,6 +2,10 @@ export type FilePathTextPart =
   | { kind: "text"; text: string }
   | { kind: "file"; text: string; path: string };
 
+export type LinkableTextPart =
+  | FilePathTextPart
+  | { kind: "url"; text: string; href: string };
+
 const VIEWABLE_FILE_EXTS =
   "png|jpe?g|gif|svg|webp|bmp|ico|md|markdown|mdown|mkd|webm|mp4|m4v|mov|wav|mp3|ogg|m4a|aac|flac|html?";
 
@@ -15,6 +19,7 @@ const FILE_PATH_RE = new RegExp(
   String.raw`(?:\.{0,2}\/|~\/)?(?:${SEG}+\/${WRAP})*${SEG}+\.(?:${VIEWABLE_FILE_EXTS})\b`,
   "gi",
 );
+const WEB_URL_RE = /https?:\/\/[^\s<>"'`。，、；：！？…]+/gi;
 const ABSOLUTE_OR_HOME_RE = /^(?:\/|~\/)/;
 const DEFAULT_IMAGE_HANDLER_TEMP_PATH_RE = /^https?:\/\/((?:\.\.\/)+var\/folders\/.+)$/i;
 const DAMAGED_UPLOAD_TEMP_PATH_RE = /^(?:\.\.\/)+(var\/folders\/)/;
@@ -77,6 +82,55 @@ export function splitFilePathText(text: string): FilePathTextPart[] {
   }
 
   if (lastEnd < input.length) parts.push({ kind: "text", text: input.slice(lastEnd) });
+  return parts.length ? parts : [{ kind: "text", text: input }];
+}
+
+function trimBareWebUrl(value: string): string {
+  let out = String(value || "").replace(SENTENCE_TAIL_RE, "");
+  const pairs: Array<[string, string]> = [
+    ["(", ")"],
+    ["[", "]"],
+    ["{", "}"],
+  ];
+  for (const [open, close] of pairs) {
+    while (
+      out.endsWith(close) &&
+      out.split(close).length - 1 > out.split(open).length - 1
+    ) {
+      out = out.slice(0, -1);
+    }
+  }
+  return out.replace(/[」』”’）》】]+$/u, "");
+}
+
+function appendFilePathParts(parts: LinkableTextPart[], text: string): void {
+  if (!text) return;
+  parts.push(...splitFilePathText(text));
+}
+
+export function splitLinkableText(text: string): LinkableTextPart[] {
+  const input = String(text || "");
+  const parts: LinkableTextPart[] = [];
+  let lastEnd = 0;
+  WEB_URL_RE.lastIndex = 0;
+
+  for (let match = WEB_URL_RE.exec(input); match; match = WEB_URL_RE.exec(input)) {
+    const visible = match[0];
+    const href = trimBareWebUrl(visible);
+    try {
+      const parsed = new URL(href);
+      if (!/^https?:$/.test(parsed.protocol) || !parsed.hostname) continue;
+    } catch {
+      continue;
+    }
+
+    appendFilePathParts(parts, input.slice(lastEnd, match.index));
+    parts.push({ kind: "url", text: href, href });
+    appendFilePathParts(parts, visible.slice(href.length));
+    lastEnd = match.index + visible.length;
+  }
+
+  appendFilePathParts(parts, input.slice(lastEnd));
   return parts.length ? parts : [{ kind: "text", text: input }];
 }
 

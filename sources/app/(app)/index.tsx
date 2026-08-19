@@ -138,6 +138,7 @@ import {
   fileViewerEndpoint,
   resolveLinkedFilePath,
   splitFilePathText,
+  splitLinkableText,
 } from "@/tmux-mobile/file-links";
 import {
   composerSnippetLabel,
@@ -450,6 +451,7 @@ type FilePreviewOrigin =
 type MarkdownPathRuleOptions = {
   agent?: AgentSession | null;
   basePath?: string;
+  onOpenUrl?: (url: string) => void;
   selectable?: boolean;
 };
 
@@ -649,9 +651,13 @@ function createMarkdownPathRules(
     text: (node, _children, parentNodes, styles, inheritedStyles = {}) => {
       const content = String(node.content || "");
       const insideLink = parentNodes.some((parent) => parent?.type === "link" || parent?.type === "blocklink");
-      const parts = insideLink ? [{ kind: "text" as const, text: content }] : splitFilePathText(content);
-      const hasFile = parts.some((part) => part.kind === "file");
-      if (!hasFile) {
+      const parts = insideLink
+        ? [{ kind: "text" as const, text: content }]
+        : options.onOpenUrl
+          ? splitLinkableText(content)
+          : splitFilePathText(content);
+      const hasInteractivePart = parts.some((part) => part.kind !== "text");
+      if (!hasInteractivePart) {
         return (
           <Text key={node.key} selectable={selectable} style={[inheritedStyles, styles.text]}>
             {content}
@@ -665,8 +671,19 @@ function createMarkdownPathRules(
               <Text
                 key={`${node.key}-file-${index}`}
                 accessibilityRole="link"
+                selectable={selectable}
                 style={styles.filePathLink || styles.link}
                 onPress={() => onOpenPath(resolveLinkedFilePath(part.path, options.basePath))}
+              >
+                {part.text}
+              </Text>
+            ) : part.kind === "url" ? (
+              <Text
+                key={`${node.key}-url-${index}`}
+                accessibilityRole="link"
+                selectable={selectable}
+                style={styles.link}
+                onPress={() => options.onOpenUrl?.(part.href)}
               >
                 {part.text}
               </Text>
@@ -6096,10 +6113,6 @@ function ResponseModal({
     },
     [onOpenFile, target],
   );
-  const markdownRules = React.useMemo(
-    () => createMarkdownPathRules(openAgentFile, { agent: target, selectable: true }),
-    [openAgentFile, target],
-  );
   const handleMarkdownLinkPress = React.useCallback(
     (url: string) => {
       const filePath = filePathFromLocalHref(url);
@@ -6112,6 +6125,14 @@ function ResponseModal({
       return false;
     },
     [api, openAgentFile],
+  );
+  const markdownRules = React.useMemo(
+    () => createMarkdownPathRules(openAgentFile, {
+      agent: target,
+      onOpenUrl: handleMarkdownLinkPress,
+      selectable: true,
+    }),
+    [handleMarkdownLinkPress, openAgentFile, target],
   );
   React.useEffect(() => {
     setPinStatus("");

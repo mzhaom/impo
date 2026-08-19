@@ -5,6 +5,7 @@ import {
   fileViewerEndpoint,
   resolveLinkedFilePath,
   splitFilePathText,
+  splitLinkableText,
 } from "./file-links";
 
 describe("file link parsing", () => {
@@ -50,5 +51,43 @@ describe("file link parsing", () => {
     expect(filePathFromLocalHref("[open](./dist/index.html).")).toBe("./dist/index.html");
     expect(filePathFromLocalHref("./My%20Report.html#preview")).toBe("./My Report.html");
     expect(fileViewerEndpoint("./dist/index.html。")).toBe("/api/file-page");
+  });
+
+  it("makes bare web URLs linkable without swallowing sentence punctuation", () => {
+    expect(splitLinkableText("打开 https://bilingual-video-notes.pages.dev/。然后验证")).toEqual([
+      { kind: "text", text: "打开 " },
+      {
+        kind: "url",
+        text: "https://bilingual-video-notes.pages.dev/",
+        href: "https://bilingual-video-notes.pages.dev/",
+      },
+      { kind: "text", text: "。然后验证" },
+    ]);
+  });
+
+  it("handles multiple URLs and preserves balanced URL parentheses", () => {
+    expect(splitLinkableText("https://example.com/a_(b) and http://example.org/x)."))
+      .toEqual([
+        {
+          kind: "url",
+          text: "https://example.com/a_(b)",
+          href: "https://example.com/a_(b)",
+        },
+        { kind: "text", text: " and " },
+        {
+          kind: "url",
+          text: "http://example.org/x",
+          href: "http://example.org/x",
+        },
+        { kind: "text", text: ")." },
+      ]);
+  });
+
+  it("does not mistake local artifacts or incomplete URLs for web links", () => {
+    expect(splitLinkableText("see ./dist/index.html and https://")).toEqual([
+      { kind: "text", text: "see " },
+      { kind: "file", text: "./dist/index.html", path: "./dist/index.html" },
+      { kind: "text", text: " and https://" },
+    ]);
   });
 });
