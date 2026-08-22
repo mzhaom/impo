@@ -155,6 +155,11 @@ import {
   sessionCardSummary,
   sessionModelLabel,
 } from "@/tmux-mobile/session-card";
+import {
+  groupAgentSessions,
+  groupIndexForAgent,
+  type AgentSessionGroup,
+} from "@/tmux-mobile/session-groups";
 import { nextTerminalFollowState } from "@/tmux-mobile/terminal-follow";
 import {
   FONT_SCALE_LABELS,
@@ -475,11 +480,6 @@ function useFieldPresentation(field: VisionFieldId) {
   return resolveFieldPresentation(field, useVisionControls());
 }
 
-function activityTime(agent: AgentSession): number {
-  const value = Date.parse(String(sessionCardSummary(agent).lastActivityAt || ""));
-  return Number.isFinite(value) ? value : 0;
-}
-
 function agentIsWorking(agent: AgentSession): boolean {
   const status = agent.waitingForInput ? "waiting" : agent.status || agent.turn || "";
   return String(status).toLowerCase() === "running";
@@ -737,10 +737,6 @@ function createMarkdownPathRules(
   };
 }
 
-function compareRecentActivity(a: AgentSession, b: AgentSession): number {
-  return activityTime(b) - activityTime(a);
-}
-
 export default function CommandCenterRoute() {
   return <CommandCenterScreen />;
 }
@@ -777,7 +773,7 @@ function CommandCenterScreen() {
   const [transcriptTarget, setTranscriptTarget] = React.useState<AgentSession | null>(null);
   const pendingFileTarget = React.useRef<AgentFileTarget | null>(null);
   const filePreviewOrigin = React.useRef<FilePreviewOrigin | null>(null);
-  const agentListRef = React.useRef<FlatList<AgentSession>>(null);
+  const agentListRef = React.useRef<FlatList<AgentSessionGroup>>(null);
   const shortcutReadGeneration = React.useRef(0);
   const shortcutReadAbort = React.useRef<AbortController | null>(null);
   const shortcutActiveRead = React.useRef<{
@@ -920,22 +916,19 @@ function CommandCenterScreen() {
     });
     return { all, byMachine };
   }, [machineReadThreshold, rawAgents]);
-  const agents = React.useMemo(() => {
+  const groupedAgents = React.useMemo(() => {
     const filtered =
       machineFilter === "all"
         ? rawAgents
         : rawAgents.filter((agent) => agentMachineKey(agent) === machineFilter);
-    const starredAgents: AgentSession[] = [];
-    const unstarredAgents: AgentSession[] = [];
-    filtered.forEach((agent) => {
-      if (isAgentStarred(agent, stars)) starredAgents.push(agent);
-      else unstarredAgents.push(agent);
-    });
-    return [
-      ...starredAgents.sort(compareRecentActivity),
-      ...unstarredAgents.sort(compareRecentActivity),
-    ];
-  }, [machineFilter, rawAgents, stars]);
+    return groupAgentSessions(
+      filtered,
+      stars,
+      machines.map((machine) => machineKey(machine)),
+    );
+  }, [machineFilter, machines, rawAgents, stars]);
+  const sessionGroups = groupedAgents.groups;
+  const agents = groupedAgents.agents;
 
   const toggleStar = React.useCallback(
     (agent: AgentSession) => {
@@ -1130,13 +1123,13 @@ function CommandCenterScreen() {
       const nextIndex = Math.max(0, Math.min(agents.length - 1, currentIndex + delta));
       setSelectedAgent(agents[nextIndex] || null);
       agentListRef.current?.scrollToIndex({
-        index: Math.floor(nextIndex / columns),
+        index: groupIndexForAgent(sessionGroups, agents[nextIndex] || agents[0]),
         animated: true,
         viewPosition: 0.5,
       });
       void Haptics.selectionAsync();
     },
-    [activeShortcutAgent, agents, layout.listColumns],
+    [activeShortcutAgent, agents, layout.listColumns, sessionGroups],
   );
 
   const modalOpen = Boolean(
@@ -1556,7 +1549,8 @@ function CommandCenterScreen() {
 
       <View style={styles.summaryRow}>
         <Text style={styles.countText}>
-          {agents.length} session{agents.length === 1 ? "" : "s"}
+          {agents.length} window{agents.length === 1 ? "" : "s"} · {groupedAgents.sessionCount}{" "}
+          session{groupedAgents.sessionCount === 1 ? "" : "s"}
         </Text>
       </View>
 
@@ -1573,9 +1567,8 @@ function CommandCenterScreen() {
 
       <FlatList
         ref={agentListRef}
-        key={`agent-grid-${layout.listColumns}`}
-        data={agents}
-        keyExtractor={agentCardKey}
+        data={sessionGroups}
+        keyExtractor={(group) => group.key}
         onScrollToIndexFailed={({ index, averageItemLength }) => {
           agentListRef.current?.scrollToOffset({
             offset: Math.max(0, index * averageItemLength),
@@ -1588,9 +1581,7 @@ function CommandCenterScreen() {
           { paddingBottom: insets.bottom + 24 },
           agents.length === 0 ? styles.emptyList : null,
         ]}
-        numColumns={layout.listColumns}
-        columnWrapperStyle={layout.listColumns > 1 ? styles.cardColumnWrapper : undefined}
-        extraData={relativeTimeTick}
+        extraData={`${relativeTimeTick}:${selectedAgent ? agentCardKey(selectedAgent) : ""}`}
         refreshControl={
           <RefreshControl
             refreshing={commandCenter.isFetching}
@@ -1607,61 +1598,81 @@ function CommandCenterScreen() {
             </Text>
           </View>
         }
-        renderItem={({ item }) => {
-          const key = agentCardKey(item);
-          const starred = isAgentStarred(item, stars);
-          const selectAgent = () => setSelectedAgent(item);
-          return (
-            <View style={styles.cardGridItem}>
-            <AgentCard
-              agent={item}
-              nowMs={relativeTimeNow}
-              starred={starred}
-              selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
-              onToggleStar={() => toggleStar(item)}
-              onSelect={selectAgent}
-              onSend={() => {
-                selectAgent();
-                setSendTarget(item);
-              }}
-              onRename={() => {
-                selectAgent();
-                setRenameTarget(item);
-              }}
-              onDelete={() => {
-                selectAgent();
-                confirmDeleteAgent(item);
-              }}
-              onView={() => {
-                selectAgent();
-                setViewTarget(item);
-              }}
-              onSsh={
-                embeddedSshAvailable
-                  ? () => {
-                      selectAgent();
-                      setSshTarget(item);
-                    }
-                  : undefined
-              }
-              onViewResponse={() => {
-                selectAgent();
-                setResponseTarget(item);
-              }}
-              onCopyResponse={() => {
-                selectAgent();
-                copyAssistantResponse(item).catch(() => {});
-              }}
-              onOpenFile={(path) => openAgentFile(item, path)}
-              responseCopied={copiedResponseKey === key}
-              onTranscript={() => {
-                selectAgent();
-                setTranscriptTarget(item);
-              }}
-            />
+        renderItem={({ item: group }) => (
+          <View style={styles.sessionGroup}>
+            <View style={styles.sessionGroupHeader}>
+              <View style={styles.sessionGroupTitleBlock}>
+                <Text style={styles.sessionGroupTitle} numberOfLines={1}>
+                  {group.title}
+                </Text>
+                <Text style={styles.sessionGroupSubtitle} numberOfLines={1}>
+                  {group.subtitle}
+                </Text>
+              </View>
+              <Text style={styles.sessionGroupCount}>
+                {group.agents.length} window{group.agents.length === 1 ? "" : "s"}
+              </Text>
             </View>
-          );
-        }}
+            <View style={styles.sessionCardGrid}>
+              {group.agents.map((item) => {
+                const key = agentCardKey(item);
+                const starred = isAgentStarred(item, stars);
+                const selectAgent = () => setSelectedAgent(item);
+                return (
+                  <View key={key} style={styles.cardGridItem}>
+                    <AgentCard
+                      agent={item}
+                      nowMs={relativeTimeNow}
+                      starred={starred}
+                      selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
+                      showSessionName={group.kind === "starred"}
+                      onToggleStar={() => toggleStar(item)}
+                      onSelect={selectAgent}
+                      onSend={() => {
+                        selectAgent();
+                        setSendTarget(item);
+                      }}
+                      onRename={() => {
+                        selectAgent();
+                        setRenameTarget(item);
+                      }}
+                      onDelete={() => {
+                        selectAgent();
+                        confirmDeleteAgent(item);
+                      }}
+                      onView={() => {
+                        selectAgent();
+                        setViewTarget(item);
+                      }}
+                      onSsh={
+                        embeddedSshAvailable
+                          ? () => {
+                              selectAgent();
+                              setSshTarget(item);
+                            }
+                          : undefined
+                      }
+                      onViewResponse={() => {
+                        selectAgent();
+                        setResponseTarget(item);
+                      }}
+                      onCopyResponse={() => {
+                        selectAgent();
+                        copyAssistantResponse(item).catch(() => {});
+                      }}
+                      onOpenFile={(path) => openAgentFile(item, path)}
+                      responseCopied={copiedResponseKey === key}
+                      onTranscript={() => {
+                        selectAgent();
+                        setTranscriptTarget(item);
+                      }}
+                    />
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        )}
       />
 
       <SendModal target={sendTarget} onClose={() => setSendTarget(null)} />
@@ -2251,6 +2262,7 @@ function AgentCard({
   nowMs,
   starred,
   selected,
+  showSessionName,
   onToggleStar,
   onSelect,
   onSend,
@@ -2268,6 +2280,7 @@ function AgentCard({
   nowMs: number;
   starred: boolean;
   selected: boolean;
+  showSessionName: boolean;
   onToggleStar: () => void;
   onSelect: () => void;
   onSend: () => void;
@@ -2287,6 +2300,11 @@ function AgentCard({
   const status = agent.waitingForInput ? "waiting" : agent.status || agent.turn || "unverified";
   const running = status === "running";
   const summary = sessionCardSummary(agent);
+  const displayWindowIndex = agent.windowIndex ?? agent.index;
+  const displayWindowName =
+    displayWindowIndex === undefined || displayWindowIndex === null
+      ? summary.windowName
+      : `${displayWindowIndex}:${summary.windowName}`;
   const modelLabel = sessionModelLabel(agent);
   const activityLabel = relativeTimeLabel(summary.lastActivityAt, nowMs) || "No activity";
   const recentActivity = isRecentActivity(summary.lastActivityAt, nowMs);
@@ -2352,9 +2370,9 @@ function AgentCard({
           <View style={styles.cardTitleBlock}>
             <View style={styles.cardTitleRow}>
               <Text style={styles.cardTitle} numberOfLines={1}>
-                {agentTitle(agent)}
+                {displayWindowName}
               </Text>
-              {agent.sessionName ? (
+              {showSessionName && agent.sessionName ? (
                 <Text style={styles.sessionPill} numberOfLines={1}>
                   {agent.sessionName}
                 </Text>
@@ -7901,11 +7919,55 @@ function createStyles(
 	    paddingTop: 6,
 	    gap: columnGap,
 	  },
-	  cardColumnWrapper: {
+	  sessionGroup: {
+	    width: "100%",
+	    minWidth: 0,
+	    gap: 9,
+	    paddingBottom: 8,
+	  },
+	  sessionGroupHeader: {
+	    minWidth: 0,
+	    minHeight: 44,
+	    flexDirection: "row",
+	    alignItems: "center",
+	    justifyContent: "space-between",
+	    gap: 12,
+	    paddingHorizontal: 2,
+	    borderBottomWidth: StyleSheet.hairlineWidth,
+	    borderBottomColor: theme.colors.border,
+	  },
+	  sessionGroupTitleBlock: {
+	    flex: 1,
+	    minWidth: 0,
+	  },
+	  sessionGroupTitle: {
+	    ...theme.typography.section,
+	    color: theme.colors.text,
+	    fontSize: 18,
+	    lineHeight: 22,
+	  },
+	  sessionGroupSubtitle: {
+	    ...theme.typography.meta,
+	    color: theme.colors.textMuted,
+	    marginTop: 1,
+	  },
+	  sessionGroupCount: {
+	    ...theme.typography.meta,
+	    color: theme.colors.textMuted,
+	    flexShrink: 0,
+	  },
+	  sessionCardGrid: {
+	    width: "100%",
+	    minWidth: 0,
+	    flexDirection: "row",
+	    flexWrap: "wrap",
+	    alignItems: "flex-start",
 	    gap: columnGap,
 	  },
 	  cardGridItem: {
-	    flex: 1,
+	    flexGrow: 1,
+	    flexShrink: 1,
+	    flexBasis: cardGridMaxWidth ?? "100%",
 	    minWidth: 0,
 	    maxWidth: cardGridMaxWidth,
 	  },
