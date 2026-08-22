@@ -148,3 +148,10 @@ export function groupIndexForAgent(groups: AgentSessionGroup[], agent: AgentSess
     groups.findIndex((group) => group.agents.some((candidate) => agentCardKey(candidate) === key)),
   );
 }
+
+/** A single key is the complete accordion state, so two cards cannot be open. */
+export function nextExpandedAgentKey(currentKey: string, pressedKey: string): string {
+  const nextKey = String(pressedKey || "");
+  if (!nextKey || currentKey === nextKey) return "";
+  return nextKey;
+}

@@ -60,6 +60,8 @@ import {
   ArrowDown,
   ArrowUp,
   CheckCircle,
+  ChevronDown,
+  ChevronUp,
   CloudDownload,
   Copy,
   Edit3,
@@ -158,6 +160,7 @@ import {
 import {
   groupAgentSessions,
   groupIndexForAgent,
+  nextExpandedAgentKey,
   type AgentSessionGroup,
 } from "@/tmux-mobile/session-groups";
 import { nextTerminalFollowState } from "@/tmux-mobile/terminal-follow";
@@ -788,6 +791,7 @@ function CommandCenterScreen() {
   const [pinsVisible, setPinsVisible] = React.useState(false);
   const [settingsVisible, setSettingsVisible] = React.useState(false);
   const [selectedAgent, setSelectedAgent] = React.useState<AgentSession | null>(null);
+  const [expandedAgentKey, setExpandedAgentKey] = React.useState("");
   const [machineChipReadLoaded, setMachineChipReadLoaded] = React.useState(false);
   const [machineChipReadAt, setMachineChipReadAt] = React.useState<number | null>(null);
   const [relativeTimeTick, setRelativeTimeTick] = React.useState(0);
@@ -1547,13 +1551,6 @@ function CommandCenterScreen() {
         onChange={selectMachineFilter}
       />
 
-      <View style={styles.summaryRow}>
-        <Text style={styles.countText}>
-          {agents.length} window{agents.length === 1 ? "" : "s"} · {groupedAgents.sessionCount}{" "}
-          session{groupedAgents.sessionCount === 1 ? "" : "s"}
-        </Text>
-      </View>
-
       {commandCenter.error ? (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{commandCenter.error.message}</Text>
@@ -1581,7 +1578,7 @@ function CommandCenterScreen() {
           { paddingBottom: insets.bottom + 24 },
           agents.length === 0 ? styles.emptyList : null,
         ]}
-        extraData={`${relativeTimeTick}:${selectedAgent ? agentCardKey(selectedAgent) : ""}`}
+        extraData={`${relativeTimeTick}:${selectedAgent ? agentCardKey(selectedAgent) : ""}:${expandedAgentKey}`}
         refreshControl={
           <RefreshControl
             refreshing={commandCenter.isFetching}
@@ -1618,6 +1615,10 @@ function CommandCenterScreen() {
                 const key = agentCardKey(item);
                 const starred = isAgentStarred(item, stars);
                 const selectAgent = () => setSelectedAgent(item);
+                const toggleExpanded = () => {
+                  selectAgent();
+                  setExpandedAgentKey((current) => nextExpandedAgentKey(current, key));
+                };
                 return (
                   <View key={key} style={styles.cardGridItem}>
                     <AgentCard
@@ -1625,9 +1626,10 @@ function CommandCenterScreen() {
                       nowMs={relativeTimeNow}
                       starred={starred}
                       selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
+                      expanded={expandedAgentKey === key}
                       showSessionName={group.kind === "starred"}
                       onToggleStar={() => toggleStar(item)}
-                      onSelect={selectAgent}
+                      onToggleExpanded={toggleExpanded}
                       onSend={() => {
                         selectAgent();
                         setSendTarget(item);
@@ -2262,9 +2264,10 @@ function AgentCard({
   nowMs,
   starred,
   selected,
+  expanded,
   showSessionName,
   onToggleStar,
-  onSelect,
+  onToggleExpanded,
   onSend,
   onRename,
   onDelete,
@@ -2280,9 +2283,10 @@ function AgentCard({
   nowMs: number;
   starred: boolean;
   selected: boolean;
+  expanded: boolean;
   showSessionName: boolean;
   onToggleStar: () => void;
-  onSelect: () => void;
+  onToggleExpanded: () => void;
   onSend: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -2321,6 +2325,7 @@ function AgentCard({
     <View
       style={[
         styles.card,
+        expanded ? null : styles.cardCollapsed,
         running ? styles.cardRunning : null,
         selected ? styles.cardSelected : null,
       ]}
@@ -2331,6 +2336,7 @@ function AgentCard({
         accessibilityState={{ selected: starred }}
         style={[
           styles.starButton,
+          expanded ? null : styles.starButtonCollapsed,
           starred ? styles.starButtonActive : null,
         ]}
         hitSlop={12}
@@ -2351,20 +2357,25 @@ function AgentCard({
         }. Agent ${agent.kind || "unknown"}.${
           modelLabel ? ` Model and reasoning effort ${modelLabel}.` : ""
         } Status ${status}. Last activity ${activityLabel}.`}
-        accessibilityHint="Select session"
-        accessibilityState={{ selected }}
+        accessibilityHint={expanded ? "Collapse window details" : "Expand window details"}
+        accessibilityState={{ selected, expanded }}
         style={({ pressed }) => [
           styles.cardSummary,
+          expanded ? null : styles.cardSummaryCollapsed,
           pressed ? styles.cardSummaryPressed : null,
         ]}
-        onPress={onSelect}
+        onPress={onToggleExpanded}
       >
-        <View style={styles.cardHeader}>
-          <View style={styles.agentAvatar}>
+        <View style={[styles.cardHeader, expanded ? null : styles.cardHeaderCollapsed]}>
+          <View style={[styles.agentAvatar, expanded ? null : styles.agentAvatarCollapsed]}>
             {icon ? (
-              <Image source={icon} style={styles.agentIcon} resizeMode="contain" />
+              <Image
+                source={icon}
+                style={[styles.agentIcon, expanded ? null : styles.agentIconCollapsed]}
+                resizeMode="contain"
+              />
             ) : (
-              <Terminal size={18} color={theme.colors.text} />
+              <Terminal size={expanded ? 18 : 16} color={theme.colors.text} />
             )}
           </View>
           <View style={styles.cardTitleBlock}>
@@ -2378,34 +2389,62 @@ function AgentCard({
                 </Text>
               ) : null}
             </View>
-            <View style={styles.cardMetaRow}>
-              <Text style={styles.cardMeta} numberOfLines={1}>
-                {agent.machineHostname || agentMachineKey(agent)} · {agent.kind || "agent"} ·{" "}
-                {agent.mux || "tmux"}
-              </Text>
-              <Text
-                style={[
-                  styles.cardActivityTime,
-                  recentActivity ? styles.cardActivityTimeRecent : null,
-                ]}
-                accessibilityLabel={`${
-                  recentActivity ? "Recent activity" : "Last activity"
-                }, ${exactTimeLabel(summary.lastActivityAt) || activityLabel}`}
-                numberOfLines={1}
-              >
-                {activityLabel}
-              </Text>
-            </View>
-            {modelLabel ? (
-              <Text style={styles.cardModelMeta} numberOfLines={1}>
-                {modelLabel}
-              </Text>
+            {expanded ? (
+              <View style={styles.cardMetaRow}>
+                <Text style={styles.cardMeta} numberOfLines={1}>
+                  {agent.machineHostname || agentMachineKey(agent)} · {agent.kind || "agent"} ·{" "}
+                  {agent.mux || "tmux"}
+                </Text>
+                <Text
+                  style={[
+                    styles.cardActivityTime,
+                    recentActivity ? styles.cardActivityTimeRecent : null,
+                  ]}
+                  accessibilityLabel={`${
+                    recentActivity ? "Recent activity" : "Last activity"
+                  }, ${exactTimeLabel(summary.lastActivityAt) || activityLabel}`}
+                  numberOfLines={1}
+                >
+                  {activityLabel}
+                </Text>
+              </View>
             ) : null}
+            {modelLabel ? (
+              expanded ? (
+                <Text style={styles.cardModelMeta} numberOfLines={1}>
+                  {modelLabel}
+                </Text>
+              ) : null
+            ) : null}
+            {expanded ? null : (
+              <View style={styles.collapsedMetaRow}>
+                <View style={[styles.statusDot, statusStyle]} />
+                <Text style={styles.collapsedMetaText} numberOfLines={1}>
+                  {status}
+                </Text>
+                <Text style={styles.statusDivider}>·</Text>
+                <Text
+                  style={[
+                    styles.collapsedMetaText,
+                    recentActivity ? styles.cardActivityTimeRecent : null,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {activityLabel}
+                </Text>
+              </View>
+            )}
           </View>
+          {expanded ? (
+            <ChevronUp size={17} color={theme.colors.textMuted} />
+          ) : (
+            <ChevronDown size={17} color={theme.colors.textMuted} />
+          )}
         </View>
       </Pressable>
-      <View style={styles.cardBody}>
-        <View style={styles.statusRow}>
+      {expanded ? (
+        <View style={styles.cardBody}>
+          <View style={styles.statusRow}>
           <View style={[styles.statusDot, statusStyle]} />
           <Text style={styles.statusText}>{status}</Text>
           <Text style={styles.statusDivider}>·</Text>
@@ -2418,7 +2457,7 @@ function AgentCard({
               </Text>
             </>
           ) : null}
-        </View>
+          </View>
         {agent.lastUserText ? (
           <View>
             <CardSectionHeader label="Last prompt" timestamp={agent.lastUserAt} nowMs={nowMs} />
@@ -2489,7 +2528,8 @@ function AgentCard({
             onPress={onDelete}
           />
         </View>
-      </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -7792,17 +7832,6 @@ function createStyles(
 	    lineHeight: 12,
 	    color: theme.colors.surfaceRaised,
 	  },
-	  summaryRow: {
-	    width: "100%",
-	    maxWidth: layout.contentMaxWidth,
-	    alignSelf: "center",
-	    paddingHorizontal: layout.gutter,
-    paddingTop: 2,
-    paddingBottom: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "flex-end",
-  },
   primaryButton: {
     width: "100%",
     minWidth: 0,
@@ -7821,10 +7850,6 @@ function createStyles(
   },
   disabledButton: {
     opacity: 0.55,
-  },
-  countText: {
-    ...theme.typography.meta,
-    color: theme.colors.textMuted,
   },
   updateBannerWrap: {
     width: "100%",
@@ -7916,22 +7941,22 @@ function createStyles(
 	    maxWidth: layout.contentMaxWidth,
 	    alignSelf: "center",
 	    paddingHorizontal: layout.gutter,
-	    paddingTop: 6,
-	    gap: columnGap,
+	    paddingTop: 2,
+	    gap: 8,
 	  },
 	  sessionGroup: {
 	    width: "100%",
 	    minWidth: 0,
-	    gap: 9,
-	    paddingBottom: 8,
+	    gap: 4,
+	    paddingBottom: 4,
 	  },
 	  sessionGroupHeader: {
 	    minWidth: 0,
-	    minHeight: 44,
+	    minHeight: 30,
 	    flexDirection: "row",
 	    alignItems: "center",
 	    justifyContent: "space-between",
-	    gap: 12,
+	    gap: 8,
 	    paddingHorizontal: 2,
 	    borderBottomWidth: StyleSheet.hairlineWidth,
 	    borderBottomColor: theme.colors.border,
@@ -7939,17 +7964,21 @@ function createStyles(
 	  sessionGroupTitleBlock: {
 	    flex: 1,
 	    minWidth: 0,
+	    flexDirection: "row",
+	    alignItems: "baseline",
+	    gap: 8,
 	  },
 	  sessionGroupTitle: {
 	    ...theme.typography.section,
 	    color: theme.colors.text,
-	    fontSize: 18,
-	    lineHeight: 22,
+	    fontSize: 15,
+	    lineHeight: 18,
+	    flexShrink: 1,
 	  },
 	  sessionGroupSubtitle: {
 	    ...theme.typography.meta,
 	    color: theme.colors.textMuted,
-	    marginTop: 1,
+	    flexShrink: 1,
 	  },
 	  sessionGroupCount: {
 	    ...theme.typography.meta,
@@ -7962,7 +7991,8 @@ function createStyles(
 	    flexDirection: "row",
 	    flexWrap: "wrap",
 	    alignItems: "flex-start",
-	    gap: columnGap,
+	    columnGap,
+	    rowGap: 6,
 	  },
 	  cardGridItem: {
 	    flexGrow: 1,
@@ -7998,6 +8028,12 @@ function createStyles(
 	    borderColor: theme.colors.border,
 	    padding: layout.cardPadding,
 	    gap: 10,
+	  },
+	  cardCollapsed: {
+	    borderRadius: theme.radii.lg,
+	    paddingHorizontal: 8,
+	    paddingVertical: 0,
+	    gap: 0,
 	  },
 	  cardRunning: {
 	    borderColor: theme.dark ? "rgba(90, 150, 204, 0.42)" : "rgba(53, 89, 122, 0.42)",
@@ -8042,11 +8078,18 @@ function createStyles(
     backgroundColor: theme.dark ? "#3a2f16" : "#fff7e0",
     borderColor: theme.colors.warning,
   },
+	starButtonCollapsed: {
+	  left: 8,
+	  top: 4,
+	},
   cardSummary: {
     minWidth: 0,
     minHeight: 44,
     justifyContent: "center",
   },
+	cardSummaryCollapsed: {
+	  minHeight: 46,
+	},
   cardSummaryPressed: {
     opacity: 0.68,
   },
@@ -8058,6 +8101,12 @@ function createStyles(
     paddingLeft: 48,
     paddingRight: 2,
   },
+	cardHeaderCollapsed: {
+	  minHeight: 46,
+	  gap: 8,
+	  paddingLeft: 46,
+	  paddingRight: 0,
+	},
   agentAvatar: {
     width: 38,
     height: 38,
@@ -8068,10 +8117,19 @@ function createStyles(
     alignItems: "center",
     justifyContent: "center",
   },
+	agentAvatarCollapsed: {
+	  width: 30,
+	  height: 30,
+	  borderRadius: theme.radii.md,
+	},
   agentIcon: {
     width: 22,
     height: 22,
   },
+	agentIconCollapsed: {
+	  width: 18,
+	  height: 18,
+	},
   cardTitleBlock: {
     flex: 1,
     minWidth: 0,
@@ -8118,6 +8176,18 @@ function createStyles(
     lineHeight: 12,
     marginTop: 1,
   },
+	collapsedMetaRow: {
+	  minWidth: 0,
+	  flexDirection: "row",
+	  alignItems: "center",
+	  gap: 4,
+	  marginTop: 1,
+	},
+	collapsedMetaText: {
+	  ...theme.typography.meta,
+	  color: theme.colors.textMuted,
+	  flexShrink: 1,
+	},
   cardActivityTime: {
     ...theme.typography.meta,
     color: theme.colors.textMuted,

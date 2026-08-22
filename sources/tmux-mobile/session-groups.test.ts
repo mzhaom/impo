@@ -3,6 +3,7 @@ import { agentStarKey, type AgentSession } from "@/tmux-mobile/types";
 import {
   groupAgentSessions,
   groupIndexForAgent,
+  nextExpandedAgentKey,
 } from "@/tmux-mobile/session-groups";
 
 function agent(input: Partial<AgentSession>): AgentSession {
@@ -66,5 +67,13 @@ describe("groupAgentSessions", () => {
 
     expect(groupIndexForAgent(groups, second)).toBe(1);
     expect(groupIndexForAgent(groups, first)).toBe(0);
+  });
+});
+
+describe("nextExpandedAgentKey", () => {
+  it("opens one card, replaces it with another, and closes it on a second tap", () => {
+    expect(nextExpandedAgentKey("", "card-a")).toBe("card-a");
+    expect(nextExpandedAgentKey("card-a", "card-b")).toBe("card-b");
+    expect(nextExpandedAgentKey("card-b", "card-b")).toBe("");
   });
 });
