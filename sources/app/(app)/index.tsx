@@ -2312,6 +2312,7 @@ function AgentCard({
   const modelLabel = sessionModelLabel(agent);
   const activityLabel = relativeTimeLabel(summary.lastActivityAt, nowMs) || "No activity";
   const recentActivity = isRecentActivity(summary.lastActivityAt, nowMs);
+  const mutedActivity = !recentActivity;
   const statusStyle =
     running
       ? styles.statusRunning
@@ -2326,6 +2327,7 @@ function AgentCard({
       style={[
         styles.card,
         expanded ? null : styles.cardCollapsed,
+        mutedActivity ? styles.cardMuted : null,
         running ? styles.cardRunning : null,
         selected ? styles.cardSelected : null,
       ]}
@@ -8034,6 +8036,9 @@ function createStyles(
 	    paddingHorizontal: 8,
 	    paddingVertical: 0,
 	    gap: 0,
+	  },
+	  cardMuted: {
+	    opacity: 0.48,
 	  },
 	  cardRunning: {
 	    borderColor: theme.dark ? "rgba(90, 150, 204, 0.42)" : "rgba(53, 89, 122, 0.42)",
