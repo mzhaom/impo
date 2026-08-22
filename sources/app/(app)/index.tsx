@@ -164,6 +164,7 @@ import {
   type AgentSessionGroup,
 } from "@/tmux-mobile/session-groups";
 import { nextTerminalFollowState } from "@/tmux-mobile/terminal-follow";
+import { shouldFoldSessionCards } from "@/tmux-mobile/card-folding";
 import {
   FONT_SCALE_LABELS,
   FONT_SCALE_LEVELS,
@@ -222,6 +223,12 @@ const NATIVE_VISION_CONTROLS_STATUS: boolean | null =
       ? true
       : CJMUXVisionDevice.isIOSAppOnVision;
 const NATIVE_VISION_CONTROLS_DETECTED = NATIVE_VISION_CONTROLS_STATUS === true;
+const FOLD_SESSION_CARDS = shouldFoldSessionCards({
+  os: Platform.OS,
+  isPad: Platform.OS === "ios" && Platform.isPad,
+  isVision: Platform.OS === "ios" && Platform.isVision,
+  visionDeviceDetected: NATIVE_VISION_CONTROLS_DETECTED,
+});
 type ThemeMode = "light" | "dark";
 type MachineChipStats = {
   workingCount: number;
@@ -1617,7 +1624,9 @@ function CommandCenterScreen() {
                 const selectAgent = () => setSelectedAgent(item);
                 const toggleExpanded = () => {
                   selectAgent();
-                  setExpandedAgentKey((current) => nextExpandedAgentKey(current, key));
+                  if (FOLD_SESSION_CARDS) {
+                    setExpandedAgentKey((current) => nextExpandedAgentKey(current, key));
+                  }
                 };
                 return (
                   <View key={key} style={styles.cardGridItem}>
@@ -1626,7 +1635,8 @@ function CommandCenterScreen() {
                       nowMs={relativeTimeNow}
                       starred={starred}
                       selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
-                      expanded={expandedAgentKey === key}
+                      collapsible={FOLD_SESSION_CARDS}
+                      expanded={!FOLD_SESSION_CARDS || expandedAgentKey === key}
                       showSessionName={group.kind === "starred"}
                       onToggleStar={() => toggleStar(item)}
                       onToggleExpanded={toggleExpanded}
@@ -2264,6 +2274,7 @@ function AgentCard({
   nowMs,
   starred,
   selected,
+  collapsible,
   expanded,
   showSessionName,
   onToggleStar,
@@ -2283,6 +2294,7 @@ function AgentCard({
   nowMs: number;
   starred: boolean;
   selected: boolean;
+  collapsible: boolean;
   expanded: boolean;
   showSessionName: boolean;
   onToggleStar: () => void;
@@ -2359,8 +2371,17 @@ function AgentCard({
         }. Agent ${agent.kind || "unknown"}.${
           modelLabel ? ` Model and reasoning effort ${modelLabel}.` : ""
         } Status ${status}. Last activity ${activityLabel}.`}
-        accessibilityHint={expanded ? "Collapse window details" : "Expand window details"}
-        accessibilityState={{ selected, expanded }}
+        accessibilityHint={
+          collapsible
+            ? expanded
+              ? "Collapse window details"
+              : "Expand window details"
+            : "Select window"
+        }
+        accessibilityState={{
+          selected,
+          ...(collapsible ? { expanded } : {}),
+        }}
         style={({ pressed }) => [
           styles.cardSummary,
           expanded ? null : styles.cardSummaryCollapsed,
@@ -2437,11 +2458,13 @@ function AgentCard({
               </View>
             )}
           </View>
-          {expanded ? (
-            <ChevronUp size={17} color={theme.colors.textMuted} />
-          ) : (
-            <ChevronDown size={17} color={theme.colors.textMuted} />
-          )}
+          {collapsible ? (
+            expanded ? (
+              <ChevronUp size={17} color={theme.colors.textMuted} />
+            ) : (
+              <ChevronDown size={17} color={theme.colors.textMuted} />
+            )
+          ) : null}
         </View>
       </Pressable>
       {expanded ? (
