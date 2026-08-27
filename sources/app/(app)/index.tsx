@@ -164,7 +164,10 @@ import {
   type AgentSessionGroup,
 } from "@/tmux-mobile/session-groups";
 import { nextTerminalFollowState } from "@/tmux-mobile/terminal-follow";
-import { shouldFoldSessionCards } from "@/tmux-mobile/card-folding";
+import {
+  sessionCardFoldState,
+  shouldFoldSessionCards,
+} from "@/tmux-mobile/card-folding";
 import {
   FONT_SCALE_LABELS,
   FONT_SCALE_LEVELS,
@@ -1621,10 +1624,19 @@ function CommandCenterScreen() {
               {group.agents.map((item) => {
                 const key = agentCardKey(item);
                 const starred = isAgentStarred(item, stars);
+                const recentActivity = isRecentActivity(
+                  sessionCardSummary(item).lastActivityAt,
+                  relativeTimeNow,
+                );
+                const foldState = sessionCardFoldState({
+                  foldSessionCards: FOLD_SESSION_CARDS,
+                  recentActivity,
+                  manuallyExpanded: expandedAgentKey === key,
+                });
                 const selectAgent = () => setSelectedAgent(item);
                 const toggleExpanded = () => {
                   selectAgent();
-                  if (FOLD_SESSION_CARDS) {
+                  if (foldState.collapsible) {
                     setExpandedAgentKey((current) => nextExpandedAgentKey(current, key));
                   }
                 };
@@ -1635,8 +1647,8 @@ function CommandCenterScreen() {
                       nowMs={relativeTimeNow}
                       starred={starred}
                       selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
-                      collapsible={FOLD_SESSION_CARDS}
-                      expanded={!FOLD_SESSION_CARDS || expandedAgentKey === key}
+                      collapsible={foldState.collapsible}
+                      expanded={foldState.expanded}
                       showSessionName={group.kind === "starred"}
                       onToggleStar={() => toggleStar(item)}
                       onToggleExpanded={toggleExpanded}
