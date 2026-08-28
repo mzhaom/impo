@@ -10,13 +10,13 @@ const appSource = fs.readFileSync(
 describe("terminal theme", () => {
   it("uses the light surface and themed text outside dark mode", () => {
     expect(appSource).toContain(
-      'backgroundColor: theme.dark ? "#0d0d0c" : theme.colors.surfaceRaised',
+      'backgroundColor: theme.dark ? "#1e1e1e" : theme.colors.surfaceRaised',
     );
     expect(appSource).toMatch(
       /terminalText:\s*\{[\s\S]*?color: theme\.colors\.text,[\s\S]*?\n\s*\},/,
     );
     expect(appSource).not.toContain(
-      'backgroundColor: theme.dark ? "#0d0d0c" : "#272721"',
+      'backgroundColor: theme.dark ? "#1e1e1e" : "#272721"',
     );
   });
 

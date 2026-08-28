@@ -18,7 +18,6 @@ import {
   TextInput,
   View,
   StyleSheet,
-  useColorScheme,
   useWindowDimensions,
 } from "react-native";
 import type { StyleProp, TextInputProps, TextStyle } from "react-native";
@@ -61,6 +60,7 @@ import {
   ArrowUp,
   CheckCircle,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   CloudDownload,
   Copy,
@@ -165,10 +165,6 @@ import {
 } from "@/tmux-mobile/session-groups";
 import { nextTerminalFollowState } from "@/tmux-mobile/terminal-follow";
 import {
-  sessionCardFoldState,
-  shouldFoldSessionCards,
-} from "@/tmux-mobile/card-folding";
-import {
   FONT_SCALE_LABELS,
   FONT_SCALE_LEVELS,
   FONT_SCALE_STORAGE_KEY,
@@ -226,12 +222,6 @@ const NATIVE_VISION_CONTROLS_STATUS: boolean | null =
       ? true
       : CJMUXVisionDevice.isIOSAppOnVision;
 const NATIVE_VISION_CONTROLS_DETECTED = NATIVE_VISION_CONTROLS_STATUS === true;
-const FOLD_SESSION_CARDS = shouldFoldSessionCards({
-  os: Platform.OS,
-  isPad: Platform.OS === "ios" && Platform.isPad,
-  isVision: Platform.OS === "ios" && Platform.isVision,
-  visionDeviceDetected: NATIVE_VISION_CONTROLS_DETECTED,
-});
 type ThemeMode = "light" | "dark";
 type MachineChipStats = {
   workingCount: number;
@@ -326,9 +316,9 @@ type ResponsiveLayout = {
 function createResponsiveLayout(width = 390, height = 844, fontScale = 1): ResponsiveLayout {
   const effectiveWidth = width / fontScale;
   const isWide = effectiveWidth >= 760;
-  const listColumns = effectiveWidth >= 1180 ? 3 : effectiveWidth >= 760 ? 2 : 1;
-  const gutter = isWide ? 18 : 16;
-  const contentMaxWidth = isWide ? Math.min(width - gutter * 2, 1240) : width;
+  const listColumns = 1;
+  const gutter = isWide ? 20 : 16;
+  const contentMaxWidth = isWide ? Math.min(width - gutter * 2, 820) : width;
   return {
     width,
     height,
@@ -336,9 +326,9 @@ function createResponsiveLayout(width = 390, height = 844, fontScale = 1): Respo
     listColumns,
     gutter,
     contentMaxWidth,
-    sheetMaxWidth: isWide ? Math.min(width - gutter * 2, 760) : width,
+    sheetMaxWidth: isWide ? Math.min(width - gutter * 2, 820) : width,
     menuWidth: Math.min(width - gutter * 2, (isWide ? 300 : 226) * fontScale),
-    cardPadding: isWide ? 16 : 14,
+    cardPadding: 16,
     sessionPillMaxWidth: isWide ? 176 : 132,
   };
 }
@@ -756,7 +746,6 @@ export default function CommandCenterRoute() {
 
 function CommandCenterScreen() {
   const insets = useSafeAreaInsets();
-  const systemScheme = useColorScheme();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const auth = useTmuxMobileAuth();
   const api = useTmuxMobileApi();
@@ -767,9 +756,7 @@ function CommandCenterScreen() {
   const cardStars = useCardStars();
   const toggleCardStar = useToggleCardStar();
   const deleteWindow = useDeleteWindow();
-  const [themeMode, setThemeMode] = React.useState<ThemeMode>(
-    systemScheme === "dark" ? "dark" : "light",
-  );
+  const [themeMode, setThemeMode] = React.useState<ThemeMode>("dark");
   const [fontScaleLevel, setFontScaleLevel] = React.useState<FontScaleLevel>("standard");
   const [fontScaleLoaded, setFontScaleLoaded] = React.useState(false);
   const [visionControlsPreference, setVisionControlsPreference] =
@@ -1519,11 +1506,13 @@ function CommandCenterScreen() {
       />
       <View style={styles.header}>
         <View style={styles.headerBrand}>
-          <Image source={APP_LOGO} style={styles.headerLogo} resizeMode="contain" accessible={false} />
+          <View style={styles.headerMark}>
+            <Terminal size={18} color={theme.colors.text} strokeWidth={2.2} />
+          </View>
           <View style={styles.headerTitleBlock}>
-            <Text style={styles.title}>AMUX</Text>
+            <Text style={styles.title}>Sessions</Text>
             <Text style={styles.headerMeta} numberOfLines={1}>
-              {auth.session.user.email || auth.baseUrl}
+              {groupedAgents.sessionCount} tmux · {agents.length} windows
             </Text>
           </View>
         </View>
@@ -1585,7 +1574,7 @@ function CommandCenterScreen() {
         style={styles.listViewport}
         contentContainerStyle={[
           styles.listContent,
-          { paddingBottom: insets.bottom + 24 },
+          { paddingBottom: insets.bottom + 96 },
           agents.length === 0 ? styles.emptyList : null,
         ]}
         extraData={`${relativeTimeTick}:${selectedAgent ? agentCardKey(selectedAgent) : ""}:${expandedAgentKey}`}
@@ -1624,21 +1613,10 @@ function CommandCenterScreen() {
               {group.agents.map((item) => {
                 const key = agentCardKey(item);
                 const starred = isAgentStarred(item, stars);
-                const recentActivity = isRecentActivity(
-                  sessionCardSummary(item).lastActivityAt,
-                  relativeTimeNow,
-                );
-                const foldState = sessionCardFoldState({
-                  foldSessionCards: FOLD_SESSION_CARDS,
-                  recentActivity,
-                  manuallyExpanded: expandedAgentKey === key,
-                });
                 const selectAgent = () => setSelectedAgent(item);
                 const toggleExpanded = () => {
                   selectAgent();
-                  if (foldState.collapsible) {
-                    setExpandedAgentKey((current) => nextExpandedAgentKey(current, key));
-                  }
+                  setExpandedAgentKey((current) => nextExpandedAgentKey(current, key));
                 };
                 return (
                   <View key={key} style={styles.cardGridItem}>
@@ -1647,8 +1625,8 @@ function CommandCenterScreen() {
                       nowMs={relativeTimeNow}
                       starred={starred}
                       selected={selectedAgent ? agentCardKey(selectedAgent) === key : false}
-                      collapsible={foldState.collapsible}
-                      expanded={foldState.expanded}
+                      collapsible
+                      expanded={expandedAgentKey === key}
                       showSessionName={group.kind === "starred"}
                       onToggleStar={() => toggleStar(item)}
                       onToggleExpanded={toggleExpanded}
@@ -1698,6 +1676,19 @@ function CommandCenterScreen() {
           </View>
         )}
       />
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Start agent"
+        style={({ pressed }) => [
+          styles.newSessionFab,
+          { bottom: insets.bottom + 18 },
+          pressed ? styles.newSessionFabPressed : null,
+        ]}
+        onPress={openStartAgent}
+      >
+        <Plus size={22} color={theme.dark ? theme.colors.background : theme.colors.surface} strokeWidth={2.4} />
+      </Pressable>
 
       <SendModal target={sendTarget} onClose={() => setSendTarget(null)} />
       <RenameModal target={renameTarget} onClose={() => setRenameTarget(null)} />
@@ -1975,7 +1966,7 @@ function MachineStrip({
         return (
           <Chip key={key} active={active === key} onPress={() => onChange(key)}>
             <View style={styles.machineChipContent}>
-              <Laptop size={14} color={active === key ? theme.colors.surfaceRaised : theme.colors.textMuted} />
+              <Laptop size={14} color={active === key ? theme.colors.text : theme.colors.textMuted} />
               <Text
                 style={[
                   styles.chipText,
@@ -2350,67 +2341,34 @@ function AgentCard({
     <View
       style={[
         styles.card,
-        expanded ? null : styles.cardCollapsed,
         mutedActivity ? styles.cardMuted : null,
-        running ? styles.cardRunning : null,
         selected ? styles.cardSelected : null,
       ]}
     >
-      <RunningCardEdge active={running} />
-      <Pressable
-        accessibilityLabel={starred ? "Unstar session" : "Star session"}
-        accessibilityState={{ selected: starred }}
-        style={[
-          styles.starButton,
-          expanded ? null : styles.starButtonCollapsed,
-          starred ? styles.starButtonActive : null,
-        ]}
-        hitSlop={12}
-        onPress={onToggleStar}
-      >
-        <Star
-          size={18}
-          color={starred ? theme.colors.warning : theme.colors.textMuted}
-          fill={starred ? theme.colors.warning : "transparent"}
-        />
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Window ${summary.windowName}. Session ${
-          summary.sessionName || "unnamed"
-        }. Directory ${summary.directory || "unknown"}. Machine ${
-          summary.machineName || "unknown"
-        }. Agent ${agent.kind || "unknown"}.${
-          modelLabel ? ` Model and reasoning effort ${modelLabel}.` : ""
-        } Status ${status}. Last activity ${activityLabel}.`}
-        accessibilityHint={
-          collapsible
-            ? expanded
-              ? "Collapse window details"
-              : "Expand window details"
-            : "Select window"
-        }
-        accessibilityState={{
-          selected,
-          ...(collapsible ? { expanded } : {}),
-        }}
-        style={({ pressed }) => [
-          styles.cardSummary,
-          expanded ? null : styles.cardSummaryCollapsed,
-          pressed ? styles.cardSummaryPressed : null,
-        ]}
-        onPress={onToggleExpanded}
-      >
-        <View style={[styles.cardHeader, expanded ? null : styles.cardHeaderCollapsed]}>
-          <View style={[styles.agentAvatar, expanded ? null : styles.agentAvatarCollapsed]}>
+      <View style={styles.sessionRowTop}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open window ${summary.windowName}. Session ${
+            summary.sessionName || "unnamed"
+          }. Machine ${summary.machineName || "unknown"}. Agent ${agent.kind || "unknown"}. ${
+            modelLabel ? `Model and reasoning effort ${modelLabel}. ` : ""
+          }Status ${status}. Last activity ${activityLabel}.`}
+          accessibilityHint="Open the session terminal"
+          accessibilityState={{ selected }}
+          style={({ pressed }) => [
+            styles.sessionRowMain,
+            pressed ? styles.cardSummaryPressed : null,
+          ]}
+          onPress={onView}
+        >
+          <View style={styles.sessionIndicatorColumn}>
+            <View style={[styles.statusDot, statusStyle]} />
+          </View>
+          <View style={styles.sessionAgentGlyph}>
             {icon ? (
-              <Image
-                source={icon}
-                style={[styles.agentIcon, expanded ? null : styles.agentIconCollapsed]}
-                resizeMode="contain"
-              />
+              <Image source={icon} style={styles.sessionAgentIcon} resizeMode="contain" />
             ) : (
-              <Terminal size={expanded ? 18 : 16} color={theme.colors.text} />
+              <Terminal size={15} color={theme.colors.textMuted} />
             )}
           </View>
           <View style={styles.cardTitleBlock}>
@@ -2424,147 +2382,126 @@ function AgentCard({
                 </Text>
               ) : null}
             </View>
-            {expanded ? (
-              <View style={styles.cardMetaRow}>
-                <Text style={styles.cardMeta} numberOfLines={1}>
-                  {agent.machineHostname || agentMachineKey(agent)} · {agent.kind || "agent"} ·{" "}
-                  {agent.mux || "tmux"}
-                </Text>
-                <Text
-                  style={[
-                    styles.cardActivityTime,
-                    recentActivity ? styles.cardActivityTimeRecent : null,
-                  ]}
-                  accessibilityLabel={`${
-                    recentActivity ? "Recent activity" : "Last activity"
-                  }, ${exactTimeLabel(summary.lastActivityAt) || activityLabel}`}
-                  numberOfLines={1}
-                >
-                  {activityLabel}
-                </Text>
-              </View>
-            ) : null}
-            {modelLabel ? (
-              expanded ? (
-                <Text style={styles.cardModelMeta} numberOfLines={1}>
-                  {modelLabel}
-                </Text>
-              ) : null
-            ) : null}
-            {expanded ? null : (
-              <View style={styles.collapsedMetaRow}>
-                <View style={[styles.statusDot, statusStyle]} />
-                <Text style={styles.collapsedMetaText} numberOfLines={1}>
-                  {status}
-                </Text>
-                <Text style={styles.statusDivider}>·</Text>
-                <Text
-                  style={[
-                    styles.collapsedMetaText,
-                    recentActivity ? styles.cardActivityTimeRecent : null,
-                  ]}
-                  numberOfLines={1}
-                >
-                  {activityLabel}
-                </Text>
-              </View>
-            )}
+            <Text style={styles.sessionPreview} numberOfLines={1}>
+              {agent.lastAssistantText || agent.lastUserText || agentSubtitle(agent) || "No transcript yet."}
+            </Text>
+            <View style={styles.sessionMetaRow}>
+              <Text style={styles.sessionStatusText} numberOfLines={1}>
+                {status}
+              </Text>
+              <Text style={styles.statusDivider}>·</Text>
+              <Text style={styles.sessionMetaText} numberOfLines={1}>
+                {agent.kind || "agent"}{modelLabel ? ` · ${modelLabel}` : ""}
+              </Text>
+            </View>
           </View>
-          {collapsible ? (
-            expanded ? (
-              <ChevronUp size={17} color={theme.colors.textMuted} />
+          <View style={styles.sessionRowTrailing}>
+            <Text
+              style={[
+                styles.cardActivityTime,
+                recentActivity ? styles.cardActivityTimeRecent : null,
+              ]}
+              accessibilityLabel={`${
+                recentActivity ? "Recent activity" : "Last activity"
+              }, ${exactTimeLabel(summary.lastActivityAt) || activityLabel}`}
+              numberOfLines={1}
+            >
+              {activityLabel}
+            </Text>
+            <ChevronRight size={15} color={theme.colors.textMuted} />
+          </View>
+        </Pressable>
+        <View style={styles.sessionRowControls}>
+          <Pressable
+            accessibilityLabel={starred ? "Unstar session" : "Star session"}
+            accessibilityState={{ selected: starred }}
+            style={styles.sessionRowIconButton}
+            hitSlop={4}
+            onPress={onToggleStar}
+          >
+            <Star
+              size={15}
+              color={starred ? theme.colors.warning : theme.colors.textMuted}
+              fill={starred ? theme.colors.warning : "transparent"}
+            />
+          </Pressable>
+          <Pressable
+            accessibilityLabel={expanded ? "Hide session actions" : "Show session actions"}
+            accessibilityState={{ expanded: collapsible ? expanded : undefined }}
+            style={styles.sessionRowIconButton}
+            hitSlop={4}
+            onPress={onToggleExpanded}
+          >
+            {expanded ? (
+              <ChevronUp size={16} color={theme.colors.textMuted} />
             ) : (
-              <ChevronDown size={17} color={theme.colors.textMuted} />
-            )
-          ) : null}
+              <MoreVertical size={16} color={theme.colors.textMuted} />
+            )}
+          </Pressable>
         </View>
-      </Pressable>
+      </View>
       {expanded ? (
         <View style={styles.cardBody}>
           <View style={styles.statusRow}>
-          <View style={[styles.statusDot, statusStyle]} />
-          <Text style={styles.statusText}>{status}</Text>
-          <Text style={styles.statusDivider}>·</Text>
-          <Text style={styles.statusText}>{agent.turnCount || 0} turns</Text>
-          {agent.cwd ? (
-            <>
-              <Text style={styles.statusDivider}>·</Text>
-              <Text style={styles.cwdText} numberOfLines={1}>
-                {agent.cwd}
+            <Text style={styles.statusText}>{agent.machineHostname || agentMachineKey(agent)}</Text>
+            <Text style={styles.statusDivider}>·</Text>
+            <Text style={styles.statusText}>{agent.mux || "tmux"}</Text>
+            <Text style={styles.statusDivider}>·</Text>
+            <Text style={styles.statusText}>{agent.turnCount || 0} turns</Text>
+            {agent.cwd ? (
+              <>
+                <Text style={styles.statusDivider}>·</Text>
+                <Text style={styles.cwdText} numberOfLines={1}>
+                  {agent.cwd}
+                </Text>
+              </>
+            ) : null}
+          </View>
+          {agent.lastUserText ? (
+            <View>
+              <CardSectionHeader label="Last prompt" timestamp={agent.lastUserAt} nowMs={nowMs} />
+              <Text style={styles.promptText} numberOfLines={2}>
+                {agent.lastUserText}
               </Text>
-            </>
-          ) : null}
-          </View>
-        {agent.lastUserText ? (
-          <View>
-            <CardSectionHeader label="Last prompt" timestamp={agent.lastUserAt} nowMs={nowMs} />
-            <Text style={styles.promptText} numberOfLines={2}>
-              {agent.lastUserText}
-            </Text>
-          </View>
-        ) : null}
-        {agent.lastAssistantText ? (
-          <View style={styles.responseBlock}>
-            <CardSectionHeader label="Last response" timestamp={agent.lastAssistantAt} nowMs={nowMs} />
-            <LinkedPathText
-              text={agent.lastAssistantText}
-              style={styles.answerText}
-              numberOfLines={3}
-              onOpenPath={onOpenFile}
-            />
-            <View style={styles.responseActions}>
-              <ActionButton
-                icon={<Maximize2 size={15} color={theme.colors.text} />}
-                label="Open response"
-                onPress={onViewResponse}
-              />
-              <ActionButton
-                icon={
-                  responseCopied ? (
-                    <Check size={15} color={theme.colors.success} />
-                  ) : (
-                    <Copy size={15} color={theme.colors.text} />
-                  )
-                }
-                label="Copy response"
-                onPress={onCopyResponse}
-              />
             </View>
-          </View>
-        ) : null}
-        {!agent.lastUserText && !agent.lastAssistantText ? (
-          <Text style={styles.answerText} numberOfLines={2}>
-            {agentSubtitle(agent) || "No transcript yet."}
-          </Text>
-        ) : null}
-        <View style={styles.cardActions}>
-          <ActionButton icon={<Send size={15} color={theme.colors.text} />} label="Send" onPress={onSend} />
-          <ActionButton
-            icon={<Eye size={15} color={theme.colors.text} />}
-            label="Terminal"
-            showLabel
-            onPress={onView}
-          />
-          {onSsh ? (
-            <ActionButton
-              icon={<Laptop size={15} color={theme.colors.text} />}
-              label="SSH"
-              showLabel
-              onPress={onSsh}
-            />
           ) : null}
-          <ActionButton
-            icon={<MessageSquareText size={15} color={theme.colors.text} />}
-            label="Transcript"
-            onPress={onTranscript}
-          />
-          <ActionButton icon={<Edit3 size={15} color={theme.colors.text} />} label="Rename" onPress={onRename} />
-          <ActionButton
-            icon={<Trash2 size={15} color={theme.colors.danger} />}
-            label="Delete session"
-            onPress={onDelete}
-          />
-        </View>
+          {agent.lastAssistantText ? (
+            <View style={styles.responseBlock}>
+              <CardSectionHeader label="Last response" timestamp={agent.lastAssistantAt} nowMs={nowMs} />
+              <LinkedPathText
+                text={agent.lastAssistantText}
+                style={styles.answerText}
+                numberOfLines={3}
+                onOpenPath={onOpenFile}
+              />
+              <View style={styles.responseActions}>
+                <ActionButton
+                  icon={<Maximize2 size={15} color={theme.colors.text} />}
+                  label="Open response"
+                  onPress={onViewResponse}
+                />
+                <ActionButton
+                  icon={responseCopied ? <Check size={15} color={theme.colors.success} /> : <Copy size={15} color={theme.colors.text} />}
+                  label="Copy response"
+                  onPress={onCopyResponse}
+                />
+              </View>
+            </View>
+          ) : null}
+          <View style={styles.cardActions}>
+            <ActionButton icon={<Eye size={15} color={theme.colors.text} />} label="Terminal" showLabel onPress={onView} />
+            <ActionButton icon={<Send size={15} color={theme.colors.text} />} label="Send" showLabel onPress={onSend} />
+            <ActionButton icon={<MessageSquareText size={15} color={theme.colors.text} />} label="Transcript" showLabel onPress={onTranscript} />
+            {onSsh ? (
+              <ActionButton icon={<Laptop size={15} color={theme.colors.text} />} label="SSH" onPress={onSsh} />
+            ) : null}
+            <ActionButton
+              icon={<Edit3 size={15} color={theme.colors.text} />}
+              label="Rename"
+              onPress={onRename}
+            />
+            <ActionButton icon={<Trash2 size={15} color={theme.colors.danger} />} label="Delete session" onPress={onDelete} />
+          </View>
         </View>
       ) : null}
     </View>
@@ -5994,41 +5931,38 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   return (
     <SheetModal
       visible={Boolean(target)}
-      title="Terminal"
+      title={target ? agentTitle(target) : "Session"}
       onClose={closeTerminalModal}
       tall
       wide
       fullscreen
-      hideHeader
     >
-      {target ? <StatusBar hidden /> : null}
-      <View style={styles.terminalFrame}>
-        <View pointerEvents="box-none" style={styles.terminalFullscreenControls}>
-          <Pressable
-            accessibilityRole="switch"
-            accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}
-            accessibilityState={{ checked: terminalFollow }}
-            hitSlop={6}
-            style={[
-              styles.terminalOverlayButton,
-              terminalFollow ? styles.terminalOverlayButtonActive : null,
-            ]}
-            onPress={toggleTerminalFollow}
-          >
-            <ArrowDown
-              size={17}
-              color={terminalFollow ? theme.colors.accent : theme.colors.textMuted}
-            />
-          </Pressable>
-          <Pressable
-            accessibilityLabel="Close terminal"
-            hitSlop={6}
-            style={styles.terminalOverlayButton}
-            onPress={closeTerminalModal}
-          >
-            <X size={17} color={theme.colors.text} />
-          </Pressable>
+      <View style={styles.sessionScreenMetaBar}>
+        <View style={styles.sessionScreenMetaTextBlock}>
+          <Text style={styles.sessionScreenEyebrow} numberOfLines={1}>
+            {target ? `${target.machineHostname || agentMachineKey(target)} · ${target.mux || "tmux"}` : "Session"}
+          </Text>
+          <Text style={styles.sessionScreenStatus} numberOfLines={1}>
+            {target?.waitingForInput ? "Waiting for input" : target?.status || target?.turn || "Unverified"}
+          </Text>
         </View>
+        <Pressable
+          accessibilityRole="switch"
+          accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}
+          accessibilityState={{ checked: terminalFollow }}
+          style={[
+            styles.sessionFollowButton,
+            terminalFollow ? styles.sessionFollowButtonActive : null,
+          ]}
+          onPress={toggleTerminalFollow}
+        >
+          <ArrowDown size={15} color={terminalFollow ? theme.colors.accent : theme.colors.textMuted} />
+          <Text style={[styles.sessionFollowText, terminalFollow ? styles.sessionFollowTextActive : null]}>
+            Follow
+          </Text>
+        </Pressable>
+      </View>
+      <View style={styles.terminalFrame}>
         {loading ? (
           <ActivityIndicator
             pointerEvents="none"
@@ -7531,7 +7465,7 @@ function SheetModal({
                     <Text style={styles.sheetTitle} numberOfLines={1}>
                       {title}
                     </Text>
-                    <Pressable style={styles.iconButton} onPress={closeSheet}>
+                    <Pressable accessibilityLabel={`Close ${title}`} style={styles.iconButton} onPress={closeSheet}>
                       <X size={18} color={theme.colors.text} />
                     </Pressable>
                   </View>
@@ -7728,13 +7662,6 @@ function createStyles(
   layout: ResponsiveLayout = DEFAULT_LAYOUT,
   fontScale = 1,
 ) {
-  const columnGap = layout.isWide ? 14 : 12;
-  const listInnerWidth = Math.max(0, layout.contentMaxWidth - layout.gutter * 2);
-  const cardGridMaxWidth =
-    layout.listColumns > 1
-      ? Math.floor((listInnerWidth - columnGap * (layout.listColumns - 1)) / layout.listColumns)
-      : undefined;
-
   const definitions = StyleSheet.create({
   screen: {
     flex: 1,
@@ -7750,7 +7677,8 @@ function createStyles(
 	    maxWidth: layout.contentMaxWidth,
 	    alignSelf: "center",
 	    paddingHorizontal: layout.gutter,
-	    paddingBottom: 10,
+	    paddingTop: 2,
+	    paddingBottom: 6,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -7760,7 +7688,16 @@ function createStyles(
     minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 9,
+  },
+  headerMark: {
+    width: 32,
+    height: 32,
+    flexShrink: 0,
+    borderRadius: theme.radii.md,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.colors.surface,
   },
   headerLogo: {
     width: 38,
@@ -7775,11 +7712,15 @@ function createStyles(
   title: {
     ...theme.typography.title,
     color: theme.colors.text,
+    fontSize: 19,
+    lineHeight: 23,
   },
   headerMeta: {
     ...theme.typography.meta,
     color: theme.colors.textMuted,
-    marginTop: 2,
+    marginTop: 0,
+    fontSize: 11,
+    lineHeight: 14,
   },
   headerButtons: {
     flexDirection: "row",
@@ -7790,12 +7731,10 @@ function createStyles(
     flexShrink: 0,
     width: 38,
     height: 38,
-    borderRadius: theme.radii.lg,
+    borderRadius: theme.radii.full,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: theme.colors.surfaceRaised,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    backgroundColor: "transparent",
   },
 	  machineStripViewport: {
 	    width: "100%",
@@ -7806,29 +7745,29 @@ function createStyles(
 	    maxHeight: 50,
 	  },
 	  machineStrip: {
-	    gap: 8,
+	    gap: 4,
 	    paddingHorizontal: layout.gutter,
-	    paddingVertical: 8,
+	    paddingVertical: 6,
     alignItems: "center",
     flexGrow: 0,
   },
 	  chip: {
-	    height: 34,
+	    height: 32,
 	    maxWidth: 220,
     flexGrow: 0,
     flexShrink: 0,
     alignSelf: "center",
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     borderRadius: theme.radii.full,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
   },
   chipActive: {
-    backgroundColor: theme.colors.accent,
-    borderColor: theme.colors.accent,
+    backgroundColor: theme.colors.surfaceRaised,
+    borderColor: theme.colors.border,
   },
   chipText: {
     ...theme.typography.meta,
@@ -7837,7 +7776,8 @@ function createStyles(
     minWidth: 0,
   },
 	  chipTextActive: {
-	    color: theme.colors.surfaceRaised,
+	    color: theme.colors.text,
+	    fontFamily: "Lato_700Bold",
 	  },
 	  machineChipContent: {
 	    flexDirection: "row",
@@ -7978,25 +7918,22 @@ function createStyles(
 	    maxWidth: layout.contentMaxWidth,
 	    alignSelf: "center",
 	    paddingHorizontal: layout.gutter,
-	    paddingTop: 2,
-	    gap: 8,
+	    paddingTop: 6,
+	    gap: 18,
 	  },
 	  sessionGroup: {
 	    width: "100%",
 	    minWidth: 0,
-	    gap: 4,
-	    paddingBottom: 4,
+	    gap: 7,
 	  },
 	  sessionGroupHeader: {
 	    minWidth: 0,
-	    minHeight: 30,
+	    minHeight: 26,
 	    flexDirection: "row",
 	    alignItems: "center",
 	    justifyContent: "space-between",
 	    gap: 8,
-	    paddingHorizontal: 2,
-	    borderBottomWidth: StyleSheet.hairlineWidth,
-	    borderBottomColor: theme.colors.border,
+	    paddingHorizontal: 4,
 	  },
 	  sessionGroupTitleBlock: {
 	    flex: 1,
@@ -8006,37 +7943,39 @@ function createStyles(
 	    gap: 8,
 	  },
 	  sessionGroupTitle: {
-	    ...theme.typography.section,
-	    color: theme.colors.text,
-	    fontSize: 15,
-	    lineHeight: 18,
+	    ...theme.typography.meta,
+	    color: theme.colors.textMuted,
+	    fontFamily: "Lato_700Bold",
+	    fontSize: 11,
+	    lineHeight: 14,
+	    letterSpacing: 0.7,
+	    textTransform: "uppercase",
 	    flexShrink: 1,
 	  },
 	  sessionGroupSubtitle: {
 	    ...theme.typography.meta,
 	    color: theme.colors.textMuted,
 	    flexShrink: 1,
+	    fontSize: 11,
 	  },
 	  sessionGroupCount: {
 	    ...theme.typography.meta,
 	    color: theme.colors.textMuted,
 	    flexShrink: 0,
+	    fontSize: 11,
 	  },
 	  sessionCardGrid: {
 	    width: "100%",
 	    minWidth: 0,
-	    flexDirection: "row",
-	    flexWrap: "wrap",
-	    alignItems: "flex-start",
-	    columnGap,
-	    rowGap: 6,
+	    backgroundColor: theme.colors.surface,
+	    borderRadius: 14,
+	    borderWidth: 1,
+	    borderColor: theme.colors.border,
+	    overflow: "hidden",
 	  },
 	  cardGridItem: {
-	    flexGrow: 1,
-	    flexShrink: 1,
-	    flexBasis: cardGridMaxWidth ?? "100%",
+	    width: "100%",
 	    minWidth: 0,
-	    maxWidth: cardGridMaxWidth,
 	  },
   emptyList: {
     flexGrow: 1,
@@ -8059,12 +7998,9 @@ function createStyles(
 	  card: {
 	    position: "relative",
 	    minWidth: 0,
-	    borderRadius: theme.radii.xl,
-	    backgroundColor: theme.colors.surfaceRaised,
-	    borderWidth: 1,
-	    borderColor: theme.colors.border,
-	    padding: layout.cardPadding,
-	    gap: 10,
+	    backgroundColor: "transparent",
+	    borderBottomWidth: StyleSheet.hairlineWidth,
+	    borderBottomColor: theme.colors.border,
 	  },
 	  cardCollapsed: {
 	    borderRadius: theme.radii.lg,
@@ -8073,13 +8009,100 @@ function createStyles(
 	    gap: 0,
 	  },
 	  cardMuted: {
-	    opacity: 0.48,
+	    opacity: 0.62,
 	  },
 	  cardRunning: {
 	    borderColor: theme.dark ? "rgba(90, 150, 204, 0.42)" : "rgba(53, 89, 122, 0.42)",
 	  },
 	  cardSelected: {
-	    borderColor: theme.colors.accent,
+	    backgroundColor: theme.colors.surfaceRaised,
+	    borderLeftWidth: 2,
+	    borderLeftColor: theme.colors.textMuted,
+	  },
+	  sessionRowTop: {
+	    minWidth: 0,
+	    flexDirection: "row",
+	    alignItems: "stretch",
+	  },
+	  sessionRowMain: {
+	    flex: 1,
+	    minWidth: 0,
+	    minHeight: 78,
+	    paddingLeft: 12,
+	    paddingVertical: 10,
+	    flexDirection: "row",
+	    alignItems: "center",
+	    gap: 8,
+	  },
+	  sessionIndicatorColumn: {
+	    width: 12,
+	    flexShrink: 0,
+	    alignItems: "center",
+	    alignSelf: "stretch",
+	    paddingTop: 9,
+	  },
+	  sessionAgentGlyph: {
+	    width: 26,
+	    height: 26,
+	    flexShrink: 0,
+	    borderRadius: 6,
+	    alignItems: "center",
+	    justifyContent: "center",
+	    backgroundColor: theme.colors.surfaceRaised,
+	  },
+	  sessionAgentIcon: {
+	    width: 16,
+	    height: 16,
+	  },
+	  sessionPreview: {
+	    ...theme.typography.meta,
+	    color: theme.colors.textMuted,
+	    marginTop: 2,
+	  },
+	  sessionMetaRow: {
+	    minWidth: 0,
+	    flexDirection: "row",
+	    alignItems: "center",
+	    gap: 4,
+	    marginTop: 3,
+	  },
+	  sessionStatusText: {
+	    ...theme.typography.meta,
+	    color: theme.colors.text,
+	    fontSize: 10,
+	    lineHeight: 13,
+	    textTransform: "capitalize",
+	  },
+	  sessionMetaText: {
+	    ...theme.typography.meta,
+	    color: theme.colors.textMuted,
+	    flex: 1,
+	    minWidth: 0,
+	    fontSize: 10,
+	    lineHeight: 13,
+	  },
+	  sessionRowTrailing: {
+	    width: 54,
+	    flexShrink: 0,
+	    alignSelf: "stretch",
+	    alignItems: "flex-end",
+	    justifyContent: "space-between",
+	    paddingVertical: 3,
+	    flexDirection: "row",
+	  },
+	  sessionRowControls: {
+	    width: 42,
+	    flexShrink: 0,
+	    alignItems: "center",
+	    justifyContent: "center",
+	    paddingVertical: 4,
+	  },
+	  sessionRowIconButton: {
+	    width: 38,
+	    height: 34,
+	    borderRadius: theme.radii.md,
+	    alignItems: "center",
+	    justifyContent: "center",
 	  },
 	  runningEdge: {
 	    ...StyleSheet.absoluteFill,
@@ -8232,8 +8255,8 @@ function createStyles(
     ...theme.typography.meta,
     color: theme.colors.textMuted,
     flexShrink: 0,
-    fontSize: 13,
-    lineHeight: 17,
+    fontSize: 10,
+    lineHeight: 13,
     fontVariant: ["tabular-nums"],
   },
   cardActivityTimeRecent: {
@@ -8242,6 +8265,12 @@ function createStyles(
   },
   cardBody: {
     gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 14,
+    backgroundColor: theme.colors.surfaceRaised,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
   },
   statusRow: {
     flexDirection: "row",
@@ -8303,11 +8332,7 @@ function createStyles(
     color: theme.colors.text,
   },
   responseBlock: {
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    padding: 10,
+    paddingTop: 2,
     gap: 8,
   },
 	  answerText: {
@@ -8331,16 +8356,14 @@ function createStyles(
   actionButton: {
     width: 38,
     height: 38,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderRadius: theme.radii.md,
     backgroundColor: theme.colors.surface,
     alignItems: "center",
     justifyContent: "center",
   },
   actionButtonLabeled: {
     width: "auto",
-    minWidth: 72,
+    minWidth: 84,
     paddingHorizontal: 10,
     flexDirection: "row",
     gap: 6,
@@ -8354,6 +8377,25 @@ function createStyles(
     borderColor: theme.colors.accent,
     backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
   },
+	  newSessionFab: {
+	    position: "absolute",
+	    right: Math.max(layout.gutter, (layout.width - layout.contentMaxWidth) / 2 + layout.gutter),
+	    width: 52,
+	    height: 52,
+	    borderRadius: 26,
+	    alignItems: "center",
+	    justifyContent: "center",
+	    backgroundColor: theme.dark ? "#f5f5f5" : "#202020",
+	    shadowColor: "#000000",
+	    shadowOpacity: 0.24,
+	    shadowRadius: 14,
+	    shadowOffset: { width: 0, height: 7 },
+	    elevation: 8,
+	  },
+	  newSessionFabPressed: {
+	    opacity: 0.72,
+	    transform: [{ scale: 0.96 }],
+	  },
   menuLayer: {
     flex: 1,
     alignItems: "flex-end",
@@ -9041,7 +9083,10 @@ function createStyles(
   paneComposer: {
     width: "100%",
     minWidth: 0,
-    gap: 10,
+    gap: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
   },
   paneComposerSingleShell: {
     gap: 6,
@@ -9226,7 +9271,7 @@ function createStyles(
     width: "100%",
     minWidth: 0,
     minHeight: 150,
-    borderRadius: theme.radii.lg,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceRaised,
@@ -9241,7 +9286,7 @@ function createStyles(
   paneComposerInput: {
     flex: 1,
     minWidth: 0,
-    borderRadius: theme.radii.lg,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceRaised,
@@ -9278,9 +9323,7 @@ function createStyles(
   paneComposerIconButton: {
     width: 44,
     height: 44,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderRadius: theme.radii.full,
     backgroundColor: theme.colors.surfaceRaised,
     alignItems: "center",
     justifyContent: "center",
@@ -9292,9 +9335,7 @@ function createStyles(
   paneComposerToolButton: {
     minHeight: 44,
     paddingHorizontal: 12,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderRadius: theme.radii.md,
     backgroundColor: theme.colors.surfaceRaised,
     flexDirection: "row",
     alignItems: "center",
@@ -9329,9 +9370,7 @@ function createStyles(
   paneComposerInlineButton: {
     width: 44,
     height: 44,
-    borderRadius: theme.radii.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderRadius: theme.radii.full,
     backgroundColor: theme.colors.surface,
     alignItems: "center",
     justifyContent: "center",
@@ -9356,7 +9395,7 @@ function createStyles(
   paneComposerSendButton: {
     width: 44,
     height: 44,
-    borderRadius: theme.radii.lg,
+    borderRadius: theme.radii.full,
     backgroundColor: theme.colors.accent,
     alignItems: "center",
     justifyContent: "center",
@@ -9364,7 +9403,7 @@ function createStyles(
   paneComposerInlineSendButton: {
     width: 44,
     height: 44,
-    borderRadius: theme.radii.lg,
+    borderRadius: theme.radii.full,
     backgroundColor: theme.colors.accent,
     alignItems: "center",
     justifyContent: "center",
@@ -9695,12 +9734,18 @@ function createStyles(
     alignItems: "center",
     justifyContent: "space-between",
     gap: 12,
+    minHeight: 44,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
   },
   sheetTitle: {
     flex: 1,
     minWidth: 0,
     ...theme.typography.section,
     color: theme.colors.text,
+    fontSize: 17,
+    lineHeight: 22,
   },
   sheetMeta: {
     width: "100%",
@@ -9713,7 +9758,7 @@ function createStyles(
     width: "100%",
     minWidth: 0,
     flexShrink: 1,
-    marginTop: 12,
+    marginTop: 10,
   },
   sheetBodyHeaderless: {
     marginTop: 0,
@@ -9831,38 +9876,62 @@ function createStyles(
     color: theme.colors.danger,
     textAlign: "center",
   },
-  terminalFullscreenControls: {
-    position: "absolute",
-    top: 6,
-    right: 6,
-    zIndex: 2,
+  sessionScreenMetaBar: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 42,
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 12,
   },
-  terminalOverlayButton: {
-    width: 36,
-    height: 36,
+  sessionScreenMetaTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sessionScreenEyebrow: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  sessionScreenStatus: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+    marginTop: 1,
+    textTransform: "capitalize",
+  },
+  sessionFollowButton: {
+    minWidth: 74,
+    height: 32,
+    flexShrink: 0,
+    paddingHorizontal: 10,
     borderRadius: theme.radii.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.surfaceRaised,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 5,
   },
-  terminalOverlayButtonActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  sessionFollowButtonActive: {
+    backgroundColor: theme.dark ? "#172233" : "#e8f0ff",
+  },
+  sessionFollowText: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    fontSize: 11,
+  },
+  sessionFollowTextActive: {
+    color: theme.colors.accent,
   },
   terminalFrame: {
     position: "relative",
     flex: 1,
     minHeight: 0,
     minWidth: 0,
-    borderRadius: theme.radii.lg,
+    borderRadius: theme.radii.md,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    backgroundColor: theme.dark ? "#0d0d0c" : theme.colors.surfaceRaised,
+    backgroundColor: theme.dark ? "#1e1e1e" : theme.colors.surfaceRaised,
     overflow: "hidden",
   },
   terminalLoadingIndicator: {
@@ -9886,7 +9955,7 @@ function createStyles(
   },
   terminalBoxContent: {
     padding: 12,
-    paddingTop: 48,
+    paddingTop: 12,
   },
   terminalText: {
     minWidth: 0,
