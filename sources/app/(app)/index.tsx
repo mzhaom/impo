@@ -148,6 +148,10 @@ import {
   splitLinkableText,
 } from "@/tmux-mobile/file-links";
 import {
+  artifactOpenMode,
+  controllerArtifactRawUrl,
+} from "@/tmux-mobile/artifact-viewer";
+import {
   composerSnippetLabel,
   FALLBACK_SNIPPETS,
   prioritizeGoalSnippet,
@@ -2568,6 +2572,7 @@ function ActionButton({
   disabled,
   active,
   showLabel,
+  stopPropagation,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -2575,6 +2580,7 @@ function ActionButton({
   disabled?: boolean;
   active?: boolean;
   showLabel?: boolean;
+  stopPropagation?: boolean;
 }) {
   const styles = useAppStyles();
   return (
@@ -2588,7 +2594,10 @@ function ActionButton({
         active ? styles.actionButtonActive : null,
         disabled ? styles.disabledButton : null,
       ]}
-      onPress={onPress}
+      onPress={(event) => {
+        if (stopPropagation) event.stopPropagation();
+        onPress();
+      }}
     >
       {icon}
       {showLabel ? <Text style={styles.actionButtonLabel}>{label}</Text> : null}
@@ -7019,6 +7028,7 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
   const deletePin = useDeletePin();
   const [status, setStatus] = React.useState("");
   const [renameTarget, setRenameTarget] = React.useState<ArtifactPin | null>(null);
+  const [viewerPin, setViewerPin] = React.useState<ArtifactPin | null>(null);
   const [renameName, setRenameName] = React.useState("");
   const [renameVoiceStatus, setRenameVoiceStatus] = React.useState("");
   const renameVoice = useLocalVoiceInput({
@@ -7037,6 +7047,8 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
       setRenameName("");
       setRenameVoiceStatus("");
       void refetchPins();
+    } else {
+      setViewerPin(null);
     }
   }, [refetchPins, visible]);
 
@@ -7045,7 +7057,7 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
     [api],
   );
 
-  const openPin = React.useCallback(
+  const openPinInBrowser = React.useCallback(
     (pin: ArtifactPin) => {
       const url = absolutePinUrl(pin);
       if (!api) return;
@@ -7057,6 +7069,18 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
         });
     },
     [absolutePinUrl, api],
+  );
+
+  const openPin = React.useCallback(
+    (pin: ArtifactPin) => {
+      if (artifactOpenMode(pin) === "browser") {
+        openPinInBrowser(pin);
+        return;
+      }
+      setStatus("");
+      setViewerPin(pin);
+    },
+    [openPinInBrowser],
   );
 
   const copyPinLink = React.useCallback(
@@ -7265,6 +7289,146 @@ function PinnedArtifactsModal({ visible, onClose }: { visible: boolean; onClose:
           />
         )}
       />
+      <ArtifactViewerModal
+        pin={viewerPin}
+        onClose={() => setViewerPin(null)}
+        onOpenBrowser={openPinInBrowser}
+      />
+    </SheetModal>
+  );
+}
+
+function ArtifactViewerModal({
+  pin,
+  onClose,
+  onOpenBrowser,
+}: {
+  pin: ArtifactPin | null;
+  onClose: () => void;
+  onOpenBrowser: (pin: ArtifactPin) => void;
+}) {
+  const api = useTmuxMobileApi();
+  const theme = useAppTheme();
+  const styles = useAppStyles();
+  const fontScale = useFontScale();
+  const mode = pin ? artifactOpenMode(pin) : "browser";
+  const rawUrl = api && pin ? controllerArtifactRawUrl(api.baseUrl, pin.shareUrl) : "";
+  const [text, setText] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const markdownStyle = React.useMemo(
+    () => createMarkdownStyles(theme, fontScale),
+    [fontScale, theme],
+  );
+
+  React.useEffect(() => {
+    setText("");
+    setError("");
+    if (!pin || !api || (mode !== "markdown" && mode !== "text")) {
+      setLoading(false);
+      return;
+    }
+    if (!rawUrl) {
+      setError("This artifact URL cannot be opened inside the app.");
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    api
+      .artifactText(rawUrl, controller.signal)
+      .then(setText)
+      .catch((caught) => {
+        if (!controller.signal.aborted) {
+          setError(caught instanceof Error ? caught.message : String(caught));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [api, mode, pin, rawUrl]);
+
+  React.useEffect(() => {
+    if (!pin || mode !== "image") return;
+    setLoading(true);
+    setError(rawUrl ? "" : "This artifact URL cannot be opened inside the app.");
+  }, [mode, pin, rawUrl]);
+
+  const handleLinkPress = React.useCallback((url: string) => {
+    Linking.openURL(url).catch((caught) => {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    });
+    return false;
+  }, []);
+
+  const meta = pin
+    ? [pin.contentType || pin.kind || "", formatPinSize(pin.size)].filter(Boolean).join(" · ")
+    : "";
+
+  return (
+    <SheetModal
+      visible={Boolean(pin)}
+      title={pin?.name || "Artifact"}
+      onClose={onClose}
+      tall
+      wide
+    >
+      {pin ? (
+        <View style={styles.responseSheetMetaRow}>
+          <Text style={styles.sheetMeta} numberOfLines={1}>{meta}</Text>
+          <ActionButton
+            icon={<ExternalLink size={15} color={theme.colors.text} />}
+            label="Open artifact in browser"
+            onPress={() => onOpenBrowser(pin)}
+          />
+        </View>
+      ) : null}
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      {mode === "image" && rawUrl && api ? (
+        <View style={styles.artifactImageFrame}>
+          <Image
+            accessibilityLabel={pin?.name || "Artifact image"}
+            source={{
+              uri: rawUrl,
+              headers: api.token ? { Authorization: `Bearer ${api.token}` } : undefined,
+            }}
+            style={styles.artifactImage}
+            resizeMode="contain"
+            onLoadStart={() => {
+              setLoading(true);
+              setError("");
+            }}
+            onLoadEnd={() => setLoading(false)}
+            onError={(event) => {
+              setLoading(false);
+              setError(event.nativeEvent.error || "Could not load this image.");
+            }}
+          />
+          {loading ? (
+            <ActivityIndicator
+              pointerEvents="none"
+              style={styles.artifactLoadingOverlay}
+              color={theme.colors.accent}
+            />
+          ) : null}
+        </View>
+      ) : mode === "markdown" ? (
+        <ScrollView style={styles.responseFullBox}>
+          {loading ? <ActivityIndicator color={theme.colors.accent} /> : null}
+          {!loading && !error ? (
+            <Markdown style={markdownStyle} onLinkPress={handleLinkPress}>
+              {text || "(empty artifact)"}
+            </Markdown>
+          ) : null}
+        </ScrollView>
+      ) : mode === "text" ? (
+        <ScrollView style={styles.responseFullBox}>
+          {loading ? <ActivityIndicator color={theme.colors.accent} /> : null}
+          {!loading && !error ? (
+            <Text selectable style={styles.responseFullText}>{text || "(empty artifact)"}</Text>
+          ) : null}
+        </ScrollView>
+      ) : null}
     </SheetModal>
   );
 }
@@ -7298,10 +7462,18 @@ function ArtifactPinRow({
     (pin.sourcePath && !pin.sourcePath.startsWith("agent-response/") ? pin.sourcePath : "");
 
   return (
-    <View style={styles.pinRow}>
-      <Text style={styles.pinName} numberOfLines={2}>
-        {pin.name || "(unnamed)"}
-      </Text>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open artifact ${pin.name || "unnamed"}`}
+      style={({ pressed }) => [styles.pinRow, pressed ? styles.pinRowPressed : null]}
+      onPress={onOpen}
+    >
+      <View style={styles.pinTitleRow}>
+        <Text style={styles.pinName} numberOfLines={2}>
+          {pin.name || "(unnamed)"}
+        </Text>
+        <Eye size={16} color={theme.colors.textMuted} />
+      </View>
       {meta.length ? (
         <Text style={styles.pinMeta} numberOfLines={1}>
           {meta.join(" · ")}
@@ -7313,26 +7485,32 @@ function ArtifactPinRow({
         </Text>
       ) : null}
       <View style={styles.pinActions}>
-        <ActionButton icon={<ExternalLink size={15} color={theme.colors.text} />} label="Open artifact" onPress={onOpen} />
-        <ActionButton icon={<Link2 size={15} color={theme.colors.text} />} label="Copy artifact link" onPress={onCopy} />
+        <ActionButton
+          icon={<Link2 size={15} color={theme.colors.text} />}
+          label="Copy artifact link"
+          stopPropagation
+          onPress={onCopy}
+        />
         {pin.owned ? (
           <>
             <ActionButton
               icon={<Edit3 size={15} color={theme.colors.text} />}
               label="Rename artifact"
               disabled={busy}
+              stopPropagation
               onPress={onRename}
             />
             <ActionButton
               icon={<Trash2 size={15} color={theme.colors.danger} />}
               label="Unpin artifact"
               disabled={busy}
+              stopPropagation
               onPress={onDelete}
             />
           </>
         ) : null}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -10468,6 +10646,7 @@ function createStyles(
   pinRow: {
     width: "100%",
     minWidth: 0,
+    minHeight: 44,
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -10475,7 +10654,19 @@ function createStyles(
     padding: 12,
     gap: 5,
   },
+  pinRowPressed: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.dark ? "#162c3a" : "#e6f3ff",
+  },
+  pinTitleRow: {
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
   pinName: {
+    flex: 1,
     minWidth: 0,
     ...theme.typography.section,
     color: theme.colors.text,
@@ -10495,6 +10686,28 @@ function createStyles(
     alignItems: "center",
     gap: 8,
     marginTop: 5,
+  },
+  artifactImageFrame: {
+    position: "relative",
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    borderRadius: theme.radii.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.dark ? "#0d0d0c" : "#edece5",
+    overflow: "hidden",
+  },
+  artifactImage: {
+    width: "100%",
+    height: "100%",
+  },
+  artifactLoadingOverlay: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
   },
   turnRow: {
     borderBottomWidth: 1,
