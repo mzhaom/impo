@@ -4,6 +4,7 @@ import { toByteArray } from "base64-js";
 import type {
   AgentFileResponse,
   AgentTranscriptResponse,
+  FileBrowserResponse,
   PinArtifactResponse,
   CardStarsResponse,
   CommandCenterResponse,
@@ -281,6 +282,17 @@ export class TmuxMobileApi {
   file(machineId: string, paneId: string, path: string): Promise<AgentFileResponse> {
     const params = new URLSearchParams({ paneId, path });
     return this.request(`/api/file?${params.toString()}`, { machineId });
+  }
+
+  files(
+    machineId: string,
+    paneId: string,
+    options?: { root?: string; path?: string },
+  ): Promise<FileBrowserResponse> {
+    const params = new URLSearchParams({ paneId });
+    if (options?.root) params.set("root", options.root);
+    if (options?.path) params.set("path", options.path);
+    return this.request(`/api/files?${params.toString()}`, { machineId });
   }
 
   pinFileArtifact(input: {

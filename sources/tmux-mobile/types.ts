@@ -152,6 +152,21 @@ export interface AgentFileResponse {
   truncated?: boolean;
 }
 
+export interface FileBrowserEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  previewable?: boolean;
+}
+
+export interface FileBrowserResponse {
+  root: string;
+  path: string;
+  relativePath: string;
+  entries: FileBrowserEntry[];
+  truncated?: boolean;
+}
+
 export interface CommandCenterResponse {
   machines: Machine[];
   agents: AgentSession[];

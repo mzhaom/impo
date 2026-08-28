@@ -61,6 +61,7 @@ import {
   ArrowUp,
   CheckCircle,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronUp,
   CloudDownload,
@@ -68,7 +69,10 @@ import {
   Edit3,
   Eye,
   ExternalLink,
+  File,
   FileText,
+  Folder,
+  Image as ImageIcon,
   ImagePlus,
   Info,
   Link2,
@@ -166,6 +170,13 @@ import {
 } from "@/tmux-mobile/session-groups";
 import { nextTerminalFollowState } from "@/tmux-mobile/terminal-follow";
 import {
+  fileBrowserLocationLabel,
+  isFileBrowserImage,
+  isFileBrowserMarkdown,
+  joinFileBrowserPath,
+  parentFileBrowserPath,
+} from "@/tmux-mobile/file-browser";
+import {
   quantizeLiveTerminalTextScale,
   readTerminalTextScale,
   snapTerminalTextScale,
@@ -197,6 +208,7 @@ import type {
   AgentSession,
   AgentTranscriptResponse,
   ArtifactPin,
+  FileBrowserResponse,
   Machine,
   UserSnippetItem,
   WindowViewResponse,
@@ -462,7 +474,8 @@ type AgentFileTarget = {
 };
 type FilePreviewOrigin =
   | { kind: "response"; agent: AgentSession }
-  | { kind: "transcript"; agent: AgentSession };
+  | { kind: "transcript"; agent: AgentSession }
+  | { kind: "terminal"; agent: AgentSession };
 type MarkdownPathRuleOptions = {
   agent?: AgentSession | null;
   basePath?: string;
@@ -1031,13 +1044,17 @@ function CommandCenterScreen() {
         pendingFileTarget.current = nextTarget;
         filePreviewOrigin.current = { kind: "transcript", agent: transcriptTarget };
         setTranscriptTarget(null);
+      } else if (viewTarget) {
+        pendingFileTarget.current = nextTarget;
+        filePreviewOrigin.current = { kind: "terminal", agent: viewTarget };
+        setViewTarget(null);
       } else {
         filePreviewOrigin.current = null;
         setFileTarget(nextTarget);
       }
       void Haptics.selectionAsync();
     },
-    [responseTarget, transcriptTarget],
+    [responseTarget, transcriptTarget, viewTarget],
   );
 
   const presentPendingFile = React.useCallback(() => {
@@ -1052,7 +1069,8 @@ function CommandCenterScreen() {
     filePreviewOrigin.current = null;
     if (!origin) return;
     if (origin.kind === "response") setResponseTarget(origin.agent);
-    else setTranscriptTarget(origin.agent);
+    else if (origin.kind === "transcript") setTranscriptTarget(origin.agent);
+    else setViewTarget(origin.agent);
   }, []);
 
   const signOut = React.useCallback(() => {
@@ -1699,7 +1717,12 @@ function CommandCenterScreen() {
 
       <SendModal target={sendTarget} onClose={() => setSendTarget(null)} />
       <RenameModal target={renameTarget} onClose={() => setRenameTarget(null)} />
-      <WindowViewModal target={viewTarget} onClose={() => setViewTarget(null)} />
+      <WindowViewModal
+        target={viewTarget}
+        onOpenFile={openAgentFile}
+        onClose={() => setViewTarget(null)}
+        onDismiss={presentPendingFile}
+      />
       <EmbeddedSshModal
         target={sshTarget}
         controllerUrl={auth.session.baseUrl || auth.baseUrl}
@@ -5520,7 +5543,17 @@ function EmbeddedSshModal({
   );
 }
 
-function WindowViewModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
+function WindowViewModal({
+  target,
+  onOpenFile,
+  onClose,
+  onDismiss,
+}: {
+  target: AgentSession | null;
+  onOpenFile: (agent: AgentSession, path: string) => void;
+  onClose: () => void;
+  onDismiss?: () => void;
+}) {
   const theme = useAppTheme();
   const styles = useAppStyles();
   const appFontScale = useFontScale();
@@ -5546,6 +5579,10 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const [terminalUploading, setTerminalUploading] = React.useState(false);
   const [terminalFollow, setTerminalFollow] = React.useState(true);
   const [terminalTextScale, setTerminalTextScale] = React.useState(1);
+  const [fileBrowserVisible, setFileBrowserVisible] = React.useState(false);
+  const [fileBrowserData, setFileBrowserData] = React.useState<FileBrowserResponse | null>(null);
+  const [fileBrowserLoading, setFileBrowserLoading] = React.useState(false);
+  const [fileBrowserError, setFileBrowserError] = React.useState("");
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -5554,6 +5591,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const previousTerminalTargetKeyRef = React.useRef("");
   const terminalTextScaleRef = React.useRef(1);
   const terminalPinchBaseRef = React.useRef(1);
+  const fileBrowserRequestRef = React.useRef(0);
+  const fileBrowserTargetKeyRef = React.useRef("");
 
   React.useEffect(() => {
     let mounted = true;
@@ -5666,6 +5705,60 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const machineId = target ? agentMachineKey(target) : "";
   const terminalScopeKey = terminalTargetKey;
   const activePaneId = data?.capture?.paneId || data?.activePaneId || target?.paneId || "";
+
+  React.useEffect(() => {
+    if (!terminalTargetKey || terminalTargetKey === fileBrowserTargetKeyRef.current) return;
+    fileBrowserTargetKeyRef.current = terminalTargetKey;
+    fileBrowserRequestRef.current += 1;
+    setFileBrowserVisible(false);
+    setFileBrowserData(null);
+    setFileBrowserLoading(false);
+    setFileBrowserError("");
+  }, [terminalTargetKey]);
+
+  const loadFileBrowser = React.useCallback(
+    async (relativePath = "", root?: string) => {
+      if (!api || !target || !activePaneId) return;
+      const requestId = ++fileBrowserRequestRef.current;
+      setFileBrowserLoading(true);
+      setFileBrowserError("");
+      try {
+        const result = await api.files(machineId, activePaneId, { root, path: relativePath });
+        if (requestId !== fileBrowserRequestRef.current) return;
+        setFileBrowserData(result);
+      } catch (err) {
+        if (requestId !== fileBrowserRequestRef.current) return;
+        setFileBrowserError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (requestId === fileBrowserRequestRef.current) setFileBrowserLoading(false);
+      }
+    },
+    [activePaneId, api, machineId, target],
+  );
+
+  const openFileBrowser = React.useCallback(() => {
+    if (!activePaneId) return;
+    Keyboard.dismiss();
+    setFileBrowserVisible(true);
+    void Haptics.selectionAsync();
+    if (fileBrowserData?.root) {
+      void loadFileBrowser(fileBrowserData.relativePath, fileBrowserData.root);
+    } else {
+      void loadFileBrowser();
+    }
+  }, [activePaneId, fileBrowserData, loadFileBrowser]);
+
+  const leaveFileBrowser = React.useCallback(() => {
+    if (fileBrowserData?.relativePath) {
+      void loadFileBrowser(
+        parentFileBrowserPath(fileBrowserData.relativePath),
+        fileBrowserData.root,
+      );
+      return;
+    }
+    setFileBrowserVisible(false);
+    void Haptics.selectionAsync();
+  }, [fileBrowserData, loadFileBrowser]);
   const refreshCapture = React.useCallback(
     async (silent = false) => {
       if (!api || !target || !activePaneId) return;
@@ -5991,15 +6084,177 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
     onClose();
   }, [onClose]);
 
+  const fileBrowserLocation = fileBrowserLocationLabel(
+    fileBrowserData?.root || data?.directories?.cwd || target?.cwd || "",
+    fileBrowserData?.relativePath || "",
+  );
+  const fileBrowserScreen = (
+    <View style={styles.fileBrowserScreen}>
+      <View style={styles.fileBrowserHeader}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={fileBrowserData?.relativePath ? "Go to parent folder" : "Back to terminal"}
+          style={({ pressed }) => [
+            styles.fileBrowserIconButton,
+            pressed ? styles.fileBrowserRowPressed : null,
+          ]}
+          onPress={leaveFileBrowser}
+        >
+          <ChevronLeft size={20} color={theme.colors.text} />
+        </Pressable>
+        <View style={styles.fileBrowserTitleBlock}>
+          <Text style={styles.fileBrowserTitle}>Files</Text>
+          <Text style={styles.fileBrowserPath} numberOfLines={1}>
+            {fileBrowserLocation || "Current terminal directory"}
+          </Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Refresh files"
+          disabled={fileBrowserLoading || !activePaneId}
+          style={({ pressed }) => [
+            styles.fileBrowserIconButton,
+            pressed ? styles.fileBrowserRowPressed : null,
+            fileBrowserLoading || !activePaneId ? styles.disabledButton : null,
+          ]}
+          onPress={() => {
+            void loadFileBrowser(
+              fileBrowserData?.relativePath || "",
+              fileBrowserData?.root,
+            );
+          }}
+        >
+          {fileBrowserLoading ? (
+            <ActivityIndicator size="small" color={theme.colors.accent} />
+          ) : (
+            <RefreshCcw size={18} color={theme.colors.textMuted} />
+          )}
+        </Pressable>
+      </View>
+
+      {fileBrowserError ? (
+        <View style={styles.fileBrowserState}>
+          <AlertCircle size={22} color={theme.colors.danger} />
+          <Text style={styles.errorText}>{fileBrowserError}</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.fileBrowserRetryButton,
+              pressed ? styles.fileBrowserRowPressed : null,
+            ]}
+            onPress={() => {
+              void loadFileBrowser(
+                fileBrowserData?.relativePath || "",
+                fileBrowserData?.root,
+              );
+            }}
+          >
+            <Text style={styles.fileBrowserRetryText}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : !fileBrowserData && fileBrowserLoading ? (
+        <View style={styles.fileBrowserState}>
+          <ActivityIndicator color={theme.colors.accent} />
+          <Text style={styles.emptyText}>Reading terminal directory…</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={fileBrowserData?.entries || []}
+          keyExtractor={(entry) => `${entry.isDirectory ? "directory" : "file"}:${entry.path}`}
+          style={styles.fileBrowserList}
+          contentContainerStyle={
+            fileBrowserData?.entries.length
+              ? styles.fileBrowserListContent
+              : styles.fileBrowserEmptyContent
+          }
+          ListHeaderComponent={
+            fileBrowserData?.truncated ? (
+              <Text style={styles.fileBrowserTruncated}>Showing the first 500 entries</Text>
+            ) : null
+          }
+          ListEmptyComponent={
+            <View style={styles.fileBrowserState}>
+              <Folder size={24} color={theme.colors.textMuted} />
+              <Text style={styles.emptyTitle}>Empty folder</Text>
+              <Text style={styles.emptyText}>There are no visible files here.</Text>
+            </View>
+          }
+          renderItem={({ item }) => {
+            const disabled = !item.isDirectory && item.previewable === false;
+            const icon = item.isDirectory ? (
+              <Folder size={18} color={theme.colors.textMuted} />
+            ) : isFileBrowserImage(item.name) ? (
+              <ImageIcon size={18} color={theme.colors.textMuted} />
+            ) : isFileBrowserMarkdown(item.name) ? (
+              <FileText size={18} color={theme.colors.textMuted} />
+            ) : (
+              <File size={18} color={theme.colors.textMuted} />
+            );
+            return (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={
+                  item.isDirectory
+                    ? `Open folder ${item.name}`
+                    : disabled
+                      ? `${item.name}, preview unavailable`
+                      : `Preview file ${item.name}`
+                }
+                disabled={disabled}
+                style={({ pressed }) => [
+                  styles.fileBrowserRow,
+                  disabled ? styles.fileBrowserRowDisabled : null,
+                  pressed ? styles.fileBrowserRowPressed : null,
+                ]}
+                onPress={() => {
+                  if (item.isDirectory) {
+                    void Haptics.selectionAsync();
+                    void loadFileBrowser(
+                      joinFileBrowserPath(fileBrowserData?.relativePath || "", item.name),
+                      fileBrowserData?.root,
+                    );
+                    return;
+                  }
+                  if (target) onOpenFile(target, item.path);
+                }}
+              >
+                <View style={styles.fileBrowserRowIcon}>{icon}</View>
+                <View style={styles.fileBrowserRowTextBlock}>
+                  <Text
+                    style={[
+                      styles.fileBrowserRowTitle,
+                      disabled ? styles.fileBrowserRowTitleDisabled : null,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item.name}
+                  </Text>
+                  {disabled ? (
+                    <Text style={styles.fileBrowserRowMeta}>Preview unavailable</Text>
+                  ) : null}
+                </View>
+                {item.isDirectory ? (
+                  <ChevronRight size={17} color={theme.colors.textMuted} />
+                ) : null}
+              </Pressable>
+            );
+          }}
+        />
+      )}
+    </View>
+  );
+
   return (
     <SheetModal
       visible={Boolean(target)}
       title={target ? agentTitle(target) : "Session"}
       onClose={closeTerminalModal}
+      onDismiss={onDismiss}
       tall
       wide
       fullscreen
     >
+      {fileBrowserVisible ? fileBrowserScreen : (
+        <>
       <View style={styles.sessionScreenMetaBar}>
         <View style={styles.sessionScreenMetaTextBlock}>
           <Text style={styles.sessionScreenEyebrow} numberOfLines={1}>
@@ -6013,6 +6268,19 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           <Text accessibilityLabel={`Terminal text size ${Math.round(terminalTextScale * 100)} percent`} style={styles.sessionZoomLabel}>
             {Math.round(terminalTextScale * 100)}%
           </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open files"
+            disabled={!activePaneId}
+            style={({ pressed }) => [
+              styles.sessionFilesButton,
+              pressed ? styles.fileBrowserRowPressed : null,
+              !activePaneId ? styles.disabledButton : null,
+            ]}
+            onPress={openFileBrowser}
+          >
+            <Folder size={17} color={theme.colors.textMuted} />
+          </Pressable>
           <Pressable
             accessibilityRole="switch"
             accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}
@@ -6173,6 +6441,8 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
           </View>
         </Pressable>
       </SheetModal>
+        </>
+      )}
     </SheetModal>
   );
 }
@@ -9983,6 +10253,15 @@ function createStyles(
     textAlign: "right",
     fontVariant: ["tabular-nums"],
   },
+  sessionFilesButton: {
+    width: 44,
+    height: 44,
+    flexShrink: 0,
+    borderRadius: theme.radii.md,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   sessionFollowButton: {
     minWidth: 74,
     height: 32,
@@ -10044,6 +10323,119 @@ function createStyles(
     minWidth: 0,
     ...theme.typography.mono,
     color: theme.colors.text,
+  },
+  fileBrowserScreen: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+  },
+  fileBrowserHeader: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  fileBrowserIconButton: {
+    width: 44,
+    height: 44,
+    flexShrink: 0,
+    borderRadius: theme.radii.md,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fileBrowserTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fileBrowserTitle: {
+    ...theme.typography.section,
+    color: theme.colors.text,
+  },
+  fileBrowserPath: {
+    ...theme.typography.mono,
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+  fileBrowserList: {
+    flex: 1,
+    minHeight: 0,
+  },
+  fileBrowserListContent: {
+    paddingVertical: 4,
+  },
+  fileBrowserEmptyContent: {
+    flexGrow: 1,
+  },
+  fileBrowserRow: {
+    minHeight: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  fileBrowserRowPressed: {
+    opacity: 0.62,
+  },
+  fileBrowserRowDisabled: {
+    opacity: 0.5,
+  },
+  fileBrowserRowIcon: {
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fileBrowserRowTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fileBrowserRowTitle: {
+    ...theme.typography.body,
+    color: theme.colors.text,
+  },
+  fileBrowserRowTitleDisabled: {
+    color: theme.colors.textMuted,
+  },
+  fileBrowserRowMeta: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    marginTop: 1,
+  },
+  fileBrowserState: {
+    flex: 1,
+    minHeight: 180,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+    padding: 20,
+  },
+  fileBrowserRetryButton: {
+    minWidth: 88,
+    minHeight: 44,
+    borderRadius: theme.radii.md,
+    backgroundColor: theme.colors.surfaceRaised,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  fileBrowserRetryText: {
+    ...theme.typography.meta,
+    color: theme.colors.text,
+  },
+  fileBrowserTruncated: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   transcriptBox: {
     flex: 1,
