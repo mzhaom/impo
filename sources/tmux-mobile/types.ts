@@ -108,6 +108,9 @@ export interface CardStarsResponse {
 export interface ArtifactPin {
   id: string;
   name?: string;
+  kind?: string;
+  contentType?: string;
+  ext?: string;
   version?: number;
   size?: number;
   createdAt?: number;

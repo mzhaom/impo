@@ -137,11 +137,18 @@ describe("Terminal fullscreen behavior", () => {
     expect(appSource).toContain("fullscreen\n      hideHeader");
   });
 
-  it("keeps only follow and close in the top-right terminal controls", () => {
-    expect(appSource).toContain("style={styles.terminalFullscreenControls}");
+  it("overlays only follow and close inside the terminal frame", () => {
+    expect(appSource).toContain("<View style={styles.terminalFrame}>");
+    expect(appSource).toContain(
+      '<View pointerEvents="box-none" style={styles.terminalFullscreenControls}>',
+    );
+    expect(appSource).toContain("contentContainerStyle={styles.terminalBoxContent}");
     expect(appSource).toContain('accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}');
     expect(appSource).toContain('accessibilityLabel="Close terminal"');
     expect(appSource).toContain("onClose={closeTerminalModal}");
+    expect(appSource).toMatch(
+      /terminalFullscreenControls:\s*\{\s*position: "absolute",\s*top: 8,\s*right: 8,/,
+    );
     expect(appSource).not.toContain("onCloseTerminal");
     expect(appSource).not.toContain("onToggleFollow");
   });

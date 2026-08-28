@@ -13,7 +13,9 @@ describe("composerSnippetLabel", () => {
       "/goal ",
       "/rename ",
       "/btw ",
+      "/grill-me",
     ]);
+    expect(FALLBACK_SNIPPETS.every((item) => item.text.startsWith("/"))).toBe(true);
   });
 
   it("shows the goal slash command with its slash without changing its inserted text", () => {
@@ -31,6 +33,7 @@ describe("composerSnippetLabel", () => {
   it("keeps all other snippet labels unchanged", () => {
     expect(composerSnippetLabel("/clear")).toBe("/clear");
     expect(composerSnippetLabel("/model")).toBe("/model");
+    expect(composerSnippetLabel("/grill-me")).toBe("/grill-me");
     expect(composerSnippetLabel("continue")).toBe("continue");
   });
 

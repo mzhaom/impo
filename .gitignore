@@ -53,3 +53,17 @@ yarn-error.*
 .opencode/
 .windsurf/
 CLAUDE.local.md
+
+# Shared project skill: Codex reads .agents; Claude Code reads .claude.
+!.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/eli5/
+!.agents/skills/eli5/**
+!.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/eli5/
+!.claude/skills/eli5/**

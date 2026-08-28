@@ -8,6 +8,7 @@ export const FALLBACK_SNIPPETS: UserSnippetItem[] = [
   { text: "/goal " },
   { text: "/rename " },
   { text: "/btw " },
+  { text: "/grill-me" },
 ];
 
 export function composerSnippetLabel(text: string): string {
