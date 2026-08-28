@@ -1094,7 +1094,7 @@ function sanitizeVoicePrefix(raw) {
 // "no machine connected" UI; override for forks/mirrors.
 const CONNECTOR_CLONE_URL =
   process.env.TMUX_MOBILE_CLONE_URL ||
-  "https://github.com/zeroxaa/impo.git";
+  "https://github.com/rebyteai/impo.git";
 const DEFAULT_CONTROLLER_URL =
   process.env.TMUX_MOBILE_CONTROLLER_URL || "https://eng.impo.ai";
 const CONNECTOR_UPDATE_REF =
