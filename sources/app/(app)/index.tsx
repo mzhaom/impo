@@ -36,6 +36,7 @@ import {
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { StatusBar } from "expo-status-bar";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown, { type RenderRules } from "react-native-markdown-display";
 import { toByteArray } from "base64-js";
@@ -164,6 +165,12 @@ import {
   type AgentSessionGroup,
 } from "@/tmux-mobile/session-groups";
 import { nextTerminalFollowState } from "@/tmux-mobile/terminal-follow";
+import {
+  quantizeLiveTerminalTextScale,
+  readTerminalTextScale,
+  snapTerminalTextScale,
+  TERMINAL_TEXT_SCALE_STORAGE_KEY,
+} from "@/tmux-mobile/terminal-zoom";
 import {
   FONT_SCALE_LABELS,
   FONT_SCALE_LEVELS,
@@ -5516,6 +5523,7 @@ function EmbeddedSshModal({
 function WindowViewModal({ target, onClose }: { target: AgentSession | null; onClose: () => void }) {
   const theme = useAppTheme();
   const styles = useAppStyles();
+  const appFontScale = useFontScale();
   const visionControls = useVisionControls();
   const { width: windowWidth } = useWindowDimensions();
   const api = useTmuxMobileApi();
@@ -5537,12 +5545,67 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
   const [terminalUploadPickerVisible, setTerminalUploadPickerVisible] = React.useState(false);
   const [terminalUploading, setTerminalUploading] = React.useState(false);
   const [terminalFollow, setTerminalFollow] = React.useState(true);
+  const [terminalTextScale, setTerminalTextScale] = React.useState(1);
   const [error, setError] = React.useState("");
   const [status, setStatus] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const terminalAutoFocus = windowWidth >= 760;
   const terminalTargetKey = target ? agentCardKey(target) : "";
   const previousTerminalTargetKeyRef = React.useRef("");
+  const terminalTextScaleRef = React.useRef(1);
+  const terminalPinchBaseRef = React.useRef(1);
+
+  React.useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(TERMINAL_TEXT_SCALE_STORAGE_KEY)
+      .then((value) => {
+        if (!mounted) return;
+        const next = readTerminalTextScale(value);
+        terminalTextScaleRef.current = next;
+        setTerminalTextScale(next);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const terminalPinchGesture = React.useMemo(
+    () =>
+      Gesture.Simultaneous(
+        Gesture.Native(),
+        Gesture.Pinch()
+          .runOnJS(true)
+          .onStart(() => {
+            terminalPinchBaseRef.current = terminalTextScaleRef.current;
+          })
+          .onUpdate((event) => {
+            const next = quantizeLiveTerminalTextScale(
+              terminalPinchBaseRef.current * event.scale,
+            );
+            if (next === terminalTextScaleRef.current) return;
+            terminalTextScaleRef.current = next;
+            setTerminalTextScale(next);
+          })
+          .onEnd(() => {
+            const next = snapTerminalTextScale(terminalTextScaleRef.current);
+            const changed = next !== terminalPinchBaseRef.current;
+            terminalTextScaleRef.current = next;
+            setTerminalTextScale(next);
+            AsyncStorage.setItem(TERMINAL_TEXT_SCALE_STORAGE_KEY, String(next)).catch(() => {});
+            if (changed) void Haptics.selectionAsync();
+          }),
+      ),
+    [],
+  );
+
+  const terminalTextZoomStyle = React.useMemo(
+    () => ({
+      fontSize: Math.round(12 * appFontScale * terminalTextScale * 2) / 2,
+      lineHeight: Math.round(18 * appFontScale * terminalTextScale * 2) / 2,
+    }),
+    [appFontScale, terminalTextScale],
+  );
 
   React.useEffect(() => {
     terminalInputRef.current = terminalInput;
@@ -5946,21 +6009,26 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
             {target?.waitingForInput ? "Waiting for input" : target?.status || target?.turn || "Unverified"}
           </Text>
         </View>
-        <Pressable
-          accessibilityRole="switch"
-          accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}
-          accessibilityState={{ checked: terminalFollow }}
-          style={[
-            styles.sessionFollowButton,
-            terminalFollow ? styles.sessionFollowButtonActive : null,
-          ]}
-          onPress={toggleTerminalFollow}
-        >
-          <ArrowDown size={15} color={terminalFollow ? theme.colors.accent : theme.colors.textMuted} />
-          <Text style={[styles.sessionFollowText, terminalFollow ? styles.sessionFollowTextActive : null]}>
-            Follow
+        <View style={styles.sessionScreenActions}>
+          <Text accessibilityLabel={`Terminal text size ${Math.round(terminalTextScale * 100)} percent`} style={styles.sessionZoomLabel}>
+            {Math.round(terminalTextScale * 100)}%
           </Text>
-        </Pressable>
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}
+            accessibilityState={{ checked: terminalFollow }}
+            style={[
+              styles.sessionFollowButton,
+              terminalFollow ? styles.sessionFollowButtonActive : null,
+            ]}
+            onPress={toggleTerminalFollow}
+          >
+            <ArrowDown size={15} color={terminalFollow ? theme.colors.accent : theme.colors.textMuted} />
+            <Text style={[styles.sessionFollowText, terminalFollow ? styles.sessionFollowTextActive : null]}>
+              Follow
+            </Text>
+          </Pressable>
+        </View>
       </View>
       <View style={styles.terminalFrame}>
         {loading ? (
@@ -5970,50 +6038,52 @@ function WindowViewModal({ target, onClose }: { target: AgentSession | null; onC
             color={theme.colors.accent}
           />
         ) : null}
-        <ScrollView
-          ref={paneTailScrollRef}
-          style={styles.terminalBox}
-          contentContainerStyle={styles.terminalBoxContent}
-          onContentSizeChange={() => {
-            if (terminalShouldFollow) scrollPaneTailToEnd(false);
-          }}
-          onScrollBeginDrag={() => {
-            terminalUserScrollingRef.current = true;
-          }}
-          onScroll={({ nativeEvent }) => {
-            updateTerminalFollowFromScroll({
-              offsetY: nativeEvent.contentOffset.y,
-              viewportHeight: nativeEvent.layoutMeasurement.height,
-              contentHeight: nativeEvent.contentSize.height,
-            });
-          }}
-          onScrollEndDrag={({ nativeEvent }) => {
-            updateTerminalFollowFromScroll({
-              offsetY: nativeEvent.contentOffset.y,
-              viewportHeight: nativeEvent.layoutMeasurement.height,
-              contentHeight: nativeEvent.contentSize.height,
-            });
-            terminalUserScrollingRef.current = false;
-          }}
-          onMomentumScrollBegin={() => {
-            terminalUserScrollingRef.current = true;
-          }}
-          onMomentumScrollEnd={({ nativeEvent }) => {
-            updateTerminalFollowFromScroll({
-              offsetY: nativeEvent.contentOffset.y,
-              viewportHeight: nativeEvent.layoutMeasurement.height,
-              contentHeight: nativeEvent.contentSize.height,
-            });
-            terminalUserScrollingRef.current = false;
-          }}
-          scrollEventThrottle={16}
-          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-          keyboardShouldPersistTaps="handled"
-        >
-          <Text accessibilityLabel="Terminal output" style={styles.terminalText}>
-            {terminalText ? terminalNodes : "No output."}
-          </Text>
-        </ScrollView>
+        <GestureDetector gesture={terminalPinchGesture}>
+          <ScrollView
+            ref={paneTailScrollRef}
+            style={styles.terminalBox}
+            contentContainerStyle={styles.terminalBoxContent}
+            onContentSizeChange={() => {
+              if (terminalShouldFollow) scrollPaneTailToEnd(false);
+            }}
+            onScrollBeginDrag={() => {
+              terminalUserScrollingRef.current = true;
+            }}
+            onScroll={({ nativeEvent }) => {
+              updateTerminalFollowFromScroll({
+                offsetY: nativeEvent.contentOffset.y,
+                viewportHeight: nativeEvent.layoutMeasurement.height,
+                contentHeight: nativeEvent.contentSize.height,
+              });
+            }}
+            onScrollEndDrag={({ nativeEvent }) => {
+              updateTerminalFollowFromScroll({
+                offsetY: nativeEvent.contentOffset.y,
+                viewportHeight: nativeEvent.layoutMeasurement.height,
+                contentHeight: nativeEvent.contentSize.height,
+              });
+              terminalUserScrollingRef.current = false;
+            }}
+            onMomentumScrollBegin={() => {
+              terminalUserScrollingRef.current = true;
+            }}
+            onMomentumScrollEnd={({ nativeEvent }) => {
+              updateTerminalFollowFromScroll({
+                offsetY: nativeEvent.contentOffset.y,
+                viewportHeight: nativeEvent.layoutMeasurement.height,
+                contentHeight: nativeEvent.contentSize.height,
+              });
+              terminalUserScrollingRef.current = false;
+            }}
+            scrollEventThrottle={16}
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text accessibilityLabel="Terminal output" style={[styles.terminalText, terminalTextZoomStyle]}>
+              {terminalText ? terminalNodes : "No output."}
+            </Text>
+          </ScrollView>
+        </GestureDetector>
       </View>
       <PaneComposer
         variant="expanded"
@@ -9899,6 +9969,19 @@ function createStyles(
     color: theme.colors.text,
     marginTop: 1,
     textTransform: "capitalize",
+  },
+  sessionScreenActions: {
+    flexShrink: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  sessionZoomLabel: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    minWidth: 34,
+    textAlign: "right",
+    fontVariant: ["tabular-nums"],
   },
   sessionFollowButton: {
     minWidth: 74,
