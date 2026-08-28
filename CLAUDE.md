@@ -1,3 +1,18 @@
+# IMPO operating notes
+
+## 0. Architecture invariants
+
+tmux is the source of truth. IMPO may provide remote controls and richer UI,
+but must not introduce a parallel session, process, or filesystem model.
+
+- The repository root contains the Controller, Connector, and web client.
+- `mobile/` is the React Native client and must remain client-only.
+- Preserve existing `TMUX_MOBILE_*`, `~/.config/tmux-mobile`, native bundle,
+  service, Expo, storage, and protocol names unless a migration is explicit.
+- Keep the root npm and `mobile/` Yarn dependency graphs independent.
+- Bump the Connector protocol/version only when Connector operations or their
+  wire contract change, not for Controller-only or UI-only work.
+
 # Claude operating notes for this repo
 
 ## 1. eng.impo.ai is the canonical runtime

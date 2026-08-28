@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
-const DEFAULT_REPO_DIR = "~/src/tmux-mobile";
+const DEFAULT_REPO_DIR = "~/src/impo";
 const DEFAULT_CONTROLLER = "https://eng.impo.ai";
-const DEFAULT_CLONE_URL = "https://github.com/cjzeroxaa/tmux-mobile.git";
+const DEFAULT_CLONE_URL = "https://github.com/zeroxaa/impo.git";
 const DEFAULT_TARGET_REF = "main";
 const LAUNCHD_LABEL = process.env.TMUX_MOBILE_UPDATE_LAUNCHD_LABEL || "com.tmux-mobile.agent";
 const SYSTEMD_UNIT = process.env.TMUX_MOBILE_UPDATE_SYSTEMD_UNIT || "tmux-mobile-agent.service";
@@ -342,7 +342,7 @@ function expandHome(value) {
   const raw = String(value || "").trim();
   if (raw === "~") return os.homedir();
   if (raw.startsWith("~/")) return path.join(os.homedir(), raw.slice(2));
-  return raw || path.join(os.homedir(), "src", "tmux-mobile");
+  return raw || path.join(os.homedir(), "src", "impo");
 }
 
 function normalizeRevision(value) {

@@ -1,6 +1,6 @@
-# Product Context — tmux-mobile
+# Product Context — IMPO
 
-> Living product context for tmux-mobile. This document describes what the
+> Living product context for IMPO. This document describes what the
 > product is for, what the shipped product does today, what information each
 > surface communicates, and the design direction implied by recent product
 > feedback.

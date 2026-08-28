@@ -1,7 +1,7 @@
-# tmux-mobile architecture
+# IMPO architecture
 
 A phone-friendly web UI for driving **tmux** on a remote machine. `server.mjs`
-runs in three roles: a **controller** (public Cloud Run service that serves the
+runs in three roles: a **controller** (hosted service that serves the
 UI), an **agent** (runs next to tmux on your machine), and a **local** all-in-one
 mode. The agent dials *out* to the controller over a WebSocket, so the machine
 needs no inbound port.
@@ -10,7 +10,7 @@ needs no inbound port.
 
 ```mermaid
 graph TD
-  Phone[Phone browser] -->|HTTPS| Controller[Cloud Run controller]
+  Phone[Phone browser] -->|HTTPS| Controller[Hosted controller]
   Controller -->|WebSocket| Agent[Local agent]
   Agent -->|exec| Tmux[tmux server]
   Controller -->|transcribe / TTS / realtime| OpenAI[OpenAI API]

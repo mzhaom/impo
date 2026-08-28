@@ -351,7 +351,7 @@ const initialUrlTarget = readUrlTarget();
 const state = {
   runtimeMode: "local",
   serverRevision: "",
-  cloneUrl: "https://github.com/cjzeroxaa/tmux-mobile.git",
+  cloneUrl: "https://github.com/zeroxaa/impo.git",
   machines: [],
   machineId: initialUrlTarget.machineId || "",
   mux: initialUrlTarget.mux || "",
@@ -723,14 +723,14 @@ function selectedMachine() {
 }
 
 function shellPath(value) {
-  const path = String(value || "").trim() || "~/src/tmux-mobile";
+  const path = String(value || "").trim() || "~/src/impo";
   if (path === "~" || path.startsWith("~/")) return path;
   return `'${path.replaceAll("'", "'\\''")}'`;
 }
 
 function connectorUpdatePrompt(machine) {
   const host = machine?.hostname || machine?.machineId || machine?.id || "this machine";
-  const cwd = shellPath(machine?.agentCwd || "~/src/tmux-mobile");
+  const cwd = shellPath(machine?.agentCwd || "~/src/impo");
   const current = machine?.connectorVersion || "unknown";
   const expected = machine?.expectedConnectorVersion || "current";
   const currentRevision = machine?.agentRevision || "unknown";
@@ -959,7 +959,7 @@ function renderConnectorHelp() {
   els.snapshot.classList.toggle("dimmed", showHelp);
   if (!showHelp) return;
   const controllerUrl = window.location.origin;
-  els.connectorClone.textContent = `git clone ${state.cloneUrl} && cd tmux-mobile && npm install`;
+  els.connectorClone.textContent = `git clone ${state.cloneUrl} && cd impo && npm install`;
   els.connectorRun.textContent = `node server.mjs --register ${controllerUrl}`;
 }
 

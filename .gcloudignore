@@ -1,6 +1,7 @@
 .git
 .gitignore
 node_modules
+mobile
 .env
 .env.*
 tmp

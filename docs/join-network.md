@@ -43,15 +43,15 @@ Use the Google account that should own the machine:
 Use the controller's current connector branch:
 
 ```bash
-export TMUX_MOBILE_REF=fix-connector-update-inventory
+export TMUX_MOBILE_REF=main
 ```
 
 On a new machine:
 
 ```bash
 mkdir -p ~/src
-git clone --branch "$TMUX_MOBILE_REF" https://github.com/cjzeroxaa/tmux-mobile.git ~/src/tmux-mobile
-cd ~/src/tmux-mobile
+git clone --branch "$TMUX_MOBILE_REF" https://github.com/zeroxaa/impo.git ~/src/impo
+cd ~/src/impo
 npm install --omit=dev
 
 TMUX_MOBILE_MUXES=tmux,rmux node server.mjs --register https://eng.impo.ai --login
@@ -69,7 +69,7 @@ Future starts do not need `--login` unless you want to re-authenticate.
 For an existing checkout:
 
 ```bash
-cd ~/src/tmux-mobile
+cd ~/src/impo
 git fetch origin
 git checkout "$TMUX_MOBILE_REF"
 git pull --ff-only origin "$TMUX_MOBILE_REF"
@@ -84,7 +84,7 @@ For a quick temporary run, put the connector in tmux:
 
 ```bash
 tmux new-session -d -s tmux-mobile-connector \
-  'cd ~/src/tmux-mobile && TMUX_MOBILE_MUXES=tmux,rmux node server.mjs --register https://eng.impo.ai'
+  'cd ~/src/impo && TMUX_MOBILE_MUXES=tmux,rmux node server.mjs --register https://eng.impo.ai'
 ```
 
 For a real machine, use the OS user service below.
@@ -105,7 +105,7 @@ Create `~/Library/LaunchAgents/com.tmux-mobile.agent.plist`:
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cd /Users/YOUR-USER/src/tmux-mobile && exec node server.mjs --register https://eng.impo.ai</string>
+    <string>cd /Users/YOUR-USER/src/impo && exec node server.mjs --register https://eng.impo.ai</string>
   </array>
 
   <key>EnvironmentVariables</key>
@@ -164,7 +164,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-WorkingDirectory=%h/src/tmux-mobile
+WorkingDirectory=%h/src/impo
 Environment=TMUX_MOBILE_MUXES=tmux,rmux
 # Use the output of `command -v node` — do NOT assume /usr/bin/node:
 ExecStart=/home/YOUR-USER/.local/node/bin/node server.mjs --register https://eng.impo.ai
@@ -246,9 +246,9 @@ Clicking **Update connector** does this on the selected machine:
 3. Downloads `scripts/update-connector.mjs` from the controller's configured
    update script URL.
 4. Runs the update with environment supplied by the controller:
-   - `TMUX_MOBILE_UPDATE_REPO`, normally `~/src/tmux-mobile`
+   - `TMUX_MOBILE_UPDATE_REPO`, normally `~/src/impo`
    - `TMUX_MOBILE_UPDATE_CONTROLLER`, normally `https://eng.impo.ai`
-   - `TMUX_MOBILE_UPDATE_REF`, currently `fix-connector-update-inventory`
+   - `TMUX_MOBILE_UPDATE_REF`, normally `main`
    - `TMUX_MOBILE_UPDATE_EXPECTED_REVISION`, the controller's expected revision
    - optional `AGENT_MACHINE` / mux settings
 5. The update script clones the repo if missing, fetches, checks out the target

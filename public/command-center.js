@@ -2358,7 +2358,7 @@ async function updateConnector(machine) {
       method: "POST",
       machineId: key,
       body: JSON.stringify({
-        repoDir: machine.agentCwd || "~/src/tmux-mobile",
+        repoDir: machine.agentCwd || "~/src/impo",
         expectedRevision: machine.expectedRevision || "",
         targetRef: machine.updateRef || "",
         updateScriptUrl: machine.updateScriptUrl || "",

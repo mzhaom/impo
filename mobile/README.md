@@ -1,8 +1,8 @@
-# tmux-mobile-mobile
+# IMPO Mobile
 
-React Native Command Center client for tmux-mobile.
+React Native client for the IMPO Command Center.
 
-This app is a client only. It authenticates against a tmux-mobile controller
+This app is a client only. It authenticates against an IMPO Controller
 with the existing Google device-login flow, stores the returned browser session
 token in SecureStore, and calls the same HTTPS API used by the web Command
 Center.
@@ -35,3 +35,7 @@ The default controller is `https://eng.impo.ai`. Override it at build time with:
 ```bash
 TMUX_MOBILE_CONTROLLER_URL=https://example.com yarn dev
 ```
+
+`TMUX_MOBILE_*`, the native app identifiers, and the Expo project identity are
+intentionally retained as compatibility contracts while the product is branded
+IMPO.

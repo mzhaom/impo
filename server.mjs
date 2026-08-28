@@ -127,7 +127,7 @@ const PORT = Number(process.env.PORT || 3737);
 // Browser tab / PWA name. Defaults to a clean product name rather than the host
 // name (which on Cloud Run / local shows unhelpful values like "localhost").
 // Override with TMUX_MOBILE_APP_TITLE.
-const APP_TITLE = process.env.TMUX_MOBILE_APP_TITLE || "tmux Mobile";
+const APP_TITLE = process.env.TMUX_MOBILE_APP_TITLE || "IMPO";
 const APP_REVISION = appRevision(__dirname);
 // The clone-free Connector bundle is a single-file artifact and never serves
 // browser/controller traffic, so it must not depend on the controller's
@@ -1094,7 +1094,7 @@ function sanitizeVoicePrefix(raw) {
 // "no machine connected" UI; override for forks/mirrors.
 const CONNECTOR_CLONE_URL =
   process.env.TMUX_MOBILE_CLONE_URL ||
-  "https://github.com/cjzeroxaa/tmux-mobile.git";
+  "https://github.com/zeroxaa/impo.git";
 const DEFAULT_CONTROLLER_URL =
   process.env.TMUX_MOBILE_CONTROLLER_URL || "https://eng.impo.ai";
 const CONNECTOR_UPDATE_REF =
@@ -1733,7 +1733,7 @@ async function createWindow(sessionId) {
 
 async function startConnectorUpdate(options = {}) {
   const runtime = currentWindowRuntime();
-  const repoDir = safeUpdateValue(options.repoDir, 512) || "~/src/tmux-mobile";
+  const repoDir = safeUpdateValue(options.repoDir, 512) || "~/src/impo";
   const controllerUrl = safeControllerUrl(options.controllerUrl) || DEFAULT_CONTROLLER_URL;
   const cloneUrl = safeUpdateValue(options.cloneUrl, 512) || CONNECTOR_CLONE_URL;
   const expectedRevision =
