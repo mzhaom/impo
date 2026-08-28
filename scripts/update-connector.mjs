@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 
 const DEFAULT_REPO_DIR = "~/src/impo";
 const DEFAULT_CONTROLLER = "https://eng.impo.ai";
-const DEFAULT_CLONE_URL = "https://github.com/rebyteai/impo.git";
+const DEFAULT_CLONE_URL = "https://github.com/zeroxaa/impo.git";
 const DEFAULT_TARGET_REF = "main";
 const LAUNCHD_LABEL = process.env.TMUX_MOBILE_UPDATE_LAUNCHD_LABEL || "com.tmux-mobile.agent";
 const SYSTEMD_UNIT = process.env.TMUX_MOBILE_UPDATE_SYSTEMD_UNIT || "tmux-mobile-agent.service";

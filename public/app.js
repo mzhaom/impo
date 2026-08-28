@@ -351,7 +351,7 @@ const initialUrlTarget = readUrlTarget();
 const state = {
   runtimeMode: "local",
   serverRevision: "",
-  cloneUrl: "https://github.com/rebyteai/impo.git",
+  cloneUrl: "https://github.com/zeroxaa/impo.git",
   machines: [],
   machineId: initialUrlTarget.machineId || "",
   mux: initialUrlTarget.mux || "",

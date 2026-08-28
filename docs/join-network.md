@@ -50,7 +50,7 @@ On a new machine:
 
 ```bash
 mkdir -p ~/src
-git clone --branch "$TMUX_MOBILE_REF" https://github.com/rebyteai/impo.git ~/src/impo
+git clone --branch "$TMUX_MOBILE_REF" https://github.com/zeroxaa/impo.git ~/src/impo
 cd ~/src/impo
 npm install --omit=dev
 
