@@ -1,0 +1,4 @@
+[submodule "vendor/blink"]
+	path = vendor/blink
+	url = https://github.com/blinksh/blink.git
+	branch = v18.6.0
