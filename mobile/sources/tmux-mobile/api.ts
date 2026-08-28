@@ -1,0 +1,435 @@
+import Constants from "expo-constants";
+import { EncodingType, readAsStringAsync } from "expo-file-system/legacy";
+import { toByteArray } from "base64-js";
+import type {
+  AgentFileResponse,
+  AgentTranscriptResponse,
+  FileBrowserResponse,
+  PinArtifactResponse,
+  CardStarsResponse,
+  CommandCenterResponse,
+  DeviceLoginResult,
+  DeviceLoginStart,
+  PaneCaptureResponse,
+  PinsResponse,
+  UserSnippetItem,
+  UserSnippetsResponse,
+  WindowViewResponse,
+} from "./types";
+
+export interface UploadFileInput {
+  uri: string;
+  name: string;
+  type?: string | null;
+}
+
+export interface UploadFileResponse {
+  path?: string;
+  name?: string;
+}
+
+export interface TranscribeAudioResponse {
+  text?: string;
+  model?: string;
+}
+
+export interface WindowAudioSummaryResponse {
+  summary?: string;
+  audioBase64?: string;
+  mimeType?: string;
+  paneId?: string;
+  windowId?: string;
+  speechModel?: string;
+  voice?: string;
+}
+
+export interface AuthorizeSshInput {
+  publicKey: string;
+  deviceId: string;
+  deviceLabel?: string;
+}
+
+export interface AuthorizeSshResponse {
+  ok: true;
+  authorized: true;
+  installed: boolean;
+  fingerprint: string;
+  host: string;
+  sshHosts: string[];
+  user: string;
+  port: number;
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const bytes = toByteArray(base64);
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+
+  constructor(message: string, status = 0, body: unknown = null) {
+    super(message);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export function defaultControllerUrl(): string {
+  const value = Constants.expoConfig?.extra?.tmuxMobileControllerUrl;
+  return normalizeBaseUrl(typeof value === "string" ? value : "https://eng.impo.ai");
+}
+
+export function normalizeBaseUrl(value: string): string {
+  let next = String(value || "https://eng.impo.ai").trim();
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(next)) {
+    const local = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:|\/|$)/i.test(next);
+    next = `${local ? "http" : "https"}://${next}`;
+  }
+  const url = new URL(next);
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.origin;
+}
+
+interface RequestOptions {
+  method?: string;
+  body?: unknown;
+  token?: string;
+  machineId?: string;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+export class TmuxMobileApi {
+  readonly baseUrl: string;
+  readonly token: string;
+
+  constructor(baseUrl = defaultControllerUrl(), token = "") {
+    this.baseUrl = normalizeBaseUrl(baseUrl);
+    this.token = token;
+  }
+
+  url(pathname: string): URL {
+    return new URL(pathname, this.baseUrl);
+  }
+
+  async request<T>(pathname: string, options: RequestOptions = {}): Promise<T> {
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      ...(options.headers || {}),
+    };
+    const token = options.token ?? this.token;
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (options.machineId && options.machineId !== "local") {
+      headers["x-machine-id"] = options.machineId;
+    }
+
+    let body: BodyInit | undefined;
+    if (options.body !== undefined) {
+      const isBlob = typeof Blob !== "undefined" && options.body instanceof Blob;
+      const isArrayBuffer = options.body instanceof ArrayBuffer;
+      if (
+        typeof options.body === "string" ||
+        options.body instanceof FormData ||
+        isBlob ||
+        isArrayBuffer
+      ) {
+        body = options.body as BodyInit;
+      } else {
+        headers["content-type"] = "application/json";
+        body = JSON.stringify(options.body);
+      }
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(this.url(pathname), {
+        method: options.method || (body === undefined ? "GET" : "POST"),
+        headers,
+        body,
+        signal: options.signal,
+      });
+    } catch (error) {
+      throw new ApiError(
+        `Could not connect to ${this.baseUrl}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    const data = contentType.includes("application/json")
+      ? await response.json().catch(() => ({}))
+      : await response.text().catch(() => "");
+
+    if (!response.ok) {
+      const message =
+        data && typeof data === "object" && "error" in data
+          ? String((data as { error?: unknown }).error)
+          : `HTTP ${response.status}`;
+      throw new ApiError(message, response.status, data);
+    }
+
+    return data as T;
+  }
+
+  publicPost<T>(pathname: string, body: unknown): Promise<T> {
+    return this.request<T>(pathname, { method: "POST", body, token: "" });
+  }
+
+  startDeviceLogin(): Promise<DeviceLoginStart> {
+    return this.publicPost<DeviceLoginStart>("/auth/device/start", {});
+  }
+
+  pollDeviceLogin(id: string): Promise<DeviceLoginResult> {
+    return this.publicPost<DeviceLoginResult>("/auth/device/poll", { id });
+  }
+
+  runtime(): Promise<{ mode: "local" | "hub" }> {
+    return this.request("/api/runtime");
+  }
+
+  browserHandoff(returnTo: string): Promise<{ handoffUrl: string; expiresIn?: number }> {
+    return this.request("/auth/browser-handoff", {
+      method: "POST",
+      body: { returnTo },
+    });
+  }
+
+  commandCenter(machineId?: string): Promise<CommandCenterResponse> {
+    return this.request("/api/command-center", { machineId });
+  }
+
+  authorizeSsh(
+    machineId: string,
+    input: AuthorizeSshInput,
+  ): Promise<AuthorizeSshResponse> {
+    return this.request("/api/ssh/authorize", {
+      method: "POST",
+      machineId,
+      body: input,
+    });
+  }
+
+  cardStars(): Promise<CardStarsResponse> {
+    return this.request("/api/card-stars");
+  }
+
+  updateCardStars(keys: string[]): Promise<CardStarsResponse> {
+    return this.request("/api/card-stars", {
+      method: "PUT",
+      body: { keys },
+    });
+  }
+
+  pins(): Promise<PinsResponse> {
+    return this.request("/api/pins");
+  }
+
+  pinInlineArtifact(input: {
+    machineId?: string;
+    text: string;
+    name: string;
+    sourcePath: string;
+  }): Promise<PinArtifactResponse> {
+    return this.request("/api/pins?inline=1", {
+      method: "POST",
+      machineId: input.machineId,
+      body: {
+        machineId: input.machineId,
+        text: input.text,
+        name: input.name,
+        sourcePath: input.sourcePath,
+      },
+    });
+  }
+
+  renamePin(id: string, name: string): Promise<PinArtifactResponse> {
+    return this.request(`/api/pins?id=${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: { name },
+    });
+  }
+
+  deletePin(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/api/pins?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  }
+
+  snippets(): Promise<UserSnippetsResponse> {
+    return this.request("/api/snippets");
+  }
+
+  updateSnippets(items: UserSnippetItem[]): Promise<UserSnippetsResponse> {
+    return this.request("/api/snippets", {
+      method: "PUT",
+      body: { items },
+    });
+  }
+
+  resetSnippets(): Promise<UserSnippetsResponse> {
+    return this.request("/api/snippets", {
+      method: "DELETE",
+    });
+  }
+
+  file(machineId: string, paneId: string, path: string): Promise<AgentFileResponse> {
+    const params = new URLSearchParams({ paneId, path });
+    return this.request(`/api/file?${params.toString()}`, { machineId });
+  }
+
+  files(
+    machineId: string,
+    paneId: string,
+    options?: { root?: string; path?: string },
+  ): Promise<FileBrowserResponse> {
+    const params = new URLSearchParams({ paneId });
+    if (options?.root) params.set("root", options.root);
+    if (options?.path) params.set("path", options.path);
+    return this.request(`/api/files?${params.toString()}`, { machineId });
+  }
+
+  pinFileArtifact(input: {
+    machineId: string;
+    paneId: string;
+    path: string;
+  }): Promise<PinArtifactResponse> {
+    const params = new URLSearchParams({ paneId: input.paneId, path: input.path });
+    return this.request(`/api/pins?${params.toString()}`, {
+      method: "POST",
+      machineId: input.machineId,
+      body: {},
+    });
+  }
+
+  renameWindow(machineId: string, windowId: string, name: string): Promise<unknown> {
+    return this.request("/api/windows", {
+      method: "PATCH",
+      machineId,
+      body: { windowId, name },
+    });
+  }
+
+  deleteWindow(machineId: string, windowId: string): Promise<unknown> {
+    return this.request("/api/windows", {
+      method: "DELETE",
+      machineId,
+      body: { windowId },
+    });
+  }
+
+  sendText(machineId: string, paneId: string, text: string, enter = true, submitNudge = false): Promise<unknown> {
+    return this.request("/api/send", {
+      method: "POST",
+      machineId,
+      body: { paneId, text, enter, submitNudge },
+    });
+  }
+
+  sendKey(machineId: string, paneId: string, key: string): Promise<unknown> {
+    return this.request("/api/key", {
+      method: "POST",
+      machineId,
+      body: { paneId, key },
+    });
+  }
+
+  async uploadFile(
+    machineId: string,
+    paneId: string,
+    file: UploadFileInput,
+  ): Promise<UploadFileResponse> {
+    const base64 = await readAsStringAsync(file.uri, { encoding: EncodingType.Base64 });
+    const params = new URLSearchParams({
+      paneId,
+      name: file.name || "upload",
+    });
+    return this.request<UploadFileResponse>(`/api/upload?${params.toString()}`, {
+      method: "POST",
+      machineId,
+      headers: {
+        "content-type": file.type || "application/octet-stream",
+      },
+      body: base64ToArrayBuffer(base64),
+    });
+  }
+
+  async transcribeAudio(
+    machineId: string,
+    file: { uri: string; type?: string | null },
+  ): Promise<TranscribeAudioResponse> {
+    const base64 = await readAsStringAsync(file.uri, { encoding: EncodingType.Base64 });
+    return this.request<TranscribeAudioResponse>("/api/transcribe", {
+      method: "POST",
+      machineId,
+      headers: {
+        "content-type": file.type || "audio/wav",
+        "x-idempotency-key": `mobile-voice-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      },
+      body: base64ToArrayBuffer(base64),
+    });
+  }
+
+  windowView(machineId: string, windowId: string, lines = 120): Promise<WindowViewResponse> {
+    const params = new URLSearchParams({ windowId, lines: String(lines) });
+    return this.request(`/api/window-view?${params.toString()}`, { machineId });
+  }
+
+  capture(machineId: string, paneId: string, mode = "tail", lines = 260): Promise<PaneCaptureResponse> {
+    const params = new URLSearchParams({ paneId, mode, lines: String(lines) });
+    return this.request(`/api/capture?${params.toString()}`, { machineId });
+  }
+
+  transcript(machineId: string, paneId: string): Promise<AgentTranscriptResponse> {
+    const params = new URLSearchParams({ paneId });
+    return this.request(`/api/agent-transcript?${params.toString()}`, { machineId });
+  }
+
+  windowAudioSummary(input: {
+    machineId: string;
+    mux?: string;
+    paneId?: string;
+    windowId?: string;
+    lines?: number;
+    signal?: AbortSignal;
+  }): Promise<WindowAudioSummaryResponse> {
+    return this.request("/api/window-audio-summary", {
+      method: "POST",
+      machineId: input.machineId,
+      headers: {
+        "x-mux": input.mux || "tmux",
+      },
+      body: {
+        paneId: input.paneId || "",
+        windowId: input.windowId || "",
+        lines: input.lines,
+      },
+      signal: input.signal,
+    });
+  }
+
+  startAgent(input: {
+    machineId: string;
+    kind: "claude" | "codex";
+    cwd: string;
+    mux: string;
+    sessionName?: string;
+  }): Promise<unknown> {
+    return this.request("/api/agent-sessions", {
+      method: "POST",
+      machineId: input.machineId,
+      body: {
+        kind: input.kind,
+        cwd: input.cwd,
+        mux: input.mux,
+        sessionName: input.sessionName || "",
+      },
+    });
+  }
+}

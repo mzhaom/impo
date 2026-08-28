@@ -1,0 +1,112 @@
+const variant = process.env.APP_ENV || "development";
+const updateChannel = process.env.EAS_UPDATE_CHANNEL || (variant === "production" ? "production" : variant);
+const buildTime = process.env.BUILD_TIME || new Date().toISOString();
+const jsVersion = process.env.JS_UPDATE_VERSION || buildTime.replace(/[-:T]/g, "").slice(0, 12);
+const runtimeVersion = process.env.CJMUX_RUNTIME_VERSION || "5";
+
+export default {
+  expo: {
+    name: "CJMUX",
+    slug: "tmux-mobile-mobile",
+    version: "0.1.0",
+    runtimeVersion,
+    updates: {
+      url: "https://u.expo.dev/649f50ed-e509-4fbc-9d23-a8c9080ba635",
+      requestHeaders: {
+        "expo-channel-name": updateChannel,
+      },
+    },
+    orientation: "default",
+    icon: "./logo.png",
+    scheme: "tmuxmobile",
+    userInterfaceStyle: "automatic",
+    ios: {
+      supportsTablet: true,
+      bundleIdentifier: "ai.impo.tmuxmobile",
+      appleTeamId: "BN3369Y53F",
+      config: {
+        usesNonExemptEncryption: false,
+      },
+      infoPlist: {
+        NSLocalNetworkUsageDescription:
+          "CJMUX connects directly to machines you choose over SSH.",
+        NSMicrophoneUsageDescription:
+          "Allow CJMUX to access your microphone for voice commands.",
+        NSSpeechRecognitionUsageDescription:
+          "Allow CJMUX to transcribe your voice into prompts.",
+      },
+    },
+    android: {
+      package: "ai.impo.tmuxmobile",
+      permissions: [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.POST_NOTIFICATIONS",
+      ],
+      adaptiveIcon: {
+        foregroundImage: "./logo.png",
+        backgroundColor: "#f5f4ed",
+      },
+    },
+    web: {
+      bundler: "metro",
+      output: "single",
+      favicon: "./logo.png",
+    },
+    plugins: [
+      [
+        "expo-router",
+        {
+          root: "./sources/app",
+        },
+      ],
+      "expo-secure-store",
+      "expo-font",
+      "expo-asset",
+      "expo-audio",
+      "expo-web-browser",
+      [
+        "expo-speech-recognition",
+        {
+          microphonePermission:
+            "Allow CJMUX to access your microphone for voice commands.",
+          speechRecognitionPermission:
+            "Allow CJMUX to transcribe your voice into prompts.",
+        },
+      ],
+      "expo-system-ui",
+      "expo-status-bar",
+      "expo-updates",
+      [
+        "expo-image-picker",
+        {
+          photosPermission:
+            "Allow CJMUX to pick images and send them to tmux panes.",
+        },
+      ],
+      [
+        "expo-splash-screen",
+        {
+          backgroundColor: "#f5f4ed",
+          image: "./logo.png",
+          imageWidth: 96,
+          dark: {
+            backgroundColor: "#141413",
+            image: "./logo.png",
+          },
+        },
+      ],
+    ],
+    extra: {
+      appEnv: variant,
+      jsVersion,
+      buildTime,
+      tmuxMobileControllerUrl:
+        process.env.TMUX_MOBILE_CONTROLLER_URL || "https://eng.impo.ai",
+      eas: {
+        projectId: "649f50ed-e509-4fbc-9d23-a8c9080ba635",
+      },
+    },
+    owner: "meowoof",
+  },
+};
