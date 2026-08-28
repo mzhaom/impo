@@ -138,9 +138,11 @@ describe("Terminal fullscreen behavior", () => {
     expect(appSource).not.toContain("fullscreen\n      hideHeader");
   });
 
-  it("keeps a stable session header and follow control above the terminal", () => {
+  it("combines session identity and terminal controls into one header", () => {
     expect(appSource).toContain("<View style={styles.terminalFrame}>");
-    expect(appSource).toContain("style={styles.sessionScreenMetaBar}");
+    expect(appSource).toContain("headerSubtitle={target");
+    expect(appSource).toContain("headerActions={fileBrowserVisible ? null : (");
+    expect(appSource).not.toContain("styles.sessionScreenMetaBar");
     expect(appSource).toContain("contentContainerStyle={styles.terminalBoxContent}");
     expect(appSource).toContain('accessibilityLabel={terminalFollow ? "Stop following terminal output" : "Follow terminal output"}');
     expect(appSource).toContain('title={target ? agentTitle(target) : "Session"}');

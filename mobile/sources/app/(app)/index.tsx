@@ -6256,23 +6256,14 @@ function WindowViewModal({
     <SheetModal
       visible={Boolean(target)}
       title={target ? agentTitle(target) : "Session"}
-      onClose={closeTerminalModal}
-      onDismiss={onDismiss}
-      tall
-      wide
-      fullscreen
-    >
-      {fileBrowserVisible ? fileBrowserScreen : (
-        <>
-      <View style={styles.sessionScreenMetaBar}>
-        <View style={styles.sessionScreenMetaTextBlock}>
-          <Text style={styles.sessionScreenEyebrow} numberOfLines={1}>
-            {target ? `${target.machineHostname || agentMachineKey(target)} · ${target.mux || "tmux"}` : "Session"}
-          </Text>
-          <Text style={styles.sessionScreenStatus} numberOfLines={1}>
-            {target?.waitingForInput ? "Waiting for input" : target?.status || target?.turn || "Unverified"}
-          </Text>
-        </View>
+      headerSubtitle={target
+        ? [
+            target.machineHostname || agentMachineKey(target),
+            target.mux || "tmux",
+            target.waitingForInput ? "Waiting for input" : target.status || target.turn || "Unverified",
+          ].join(" · ")
+        : "Session"}
+      headerActions={fileBrowserVisible ? null : (
         <View style={styles.sessionScreenActions}>
           <Text accessibilityLabel={`Terminal text size ${Math.round(terminalTextScale * 100)} percent`} style={styles.sessionZoomLabel}>
             {Math.round(terminalTextScale * 100)}%
@@ -6288,7 +6279,7 @@ function WindowViewModal({
             ]}
             onPress={openFileBrowser}
           >
-            <Folder size={17} color={theme.colors.textMuted} />
+            <Folder size={16} color={theme.colors.textMuted} />
           </Pressable>
           <Pressable
             accessibilityRole="switch"
@@ -6300,13 +6291,21 @@ function WindowViewModal({
             ]}
             onPress={toggleTerminalFollow}
           >
-            <ArrowDown size={15} color={terminalFollow ? theme.colors.accent : theme.colors.textMuted} />
+            <ArrowDown size={14} color={terminalFollow ? theme.colors.accent : theme.colors.textMuted} />
             <Text style={[styles.sessionFollowText, terminalFollow ? styles.sessionFollowTextActive : null]}>
               Follow
             </Text>
           </Pressable>
         </View>
-      </View>
+      )}
+      onClose={closeTerminalModal}
+      onDismiss={onDismiss}
+      tall
+      wide
+      fullscreen
+    >
+      {fileBrowserVisible ? fileBrowserScreen : (
+        <>
       <View style={styles.terminalFrame}>
         {loading ? (
           <ActivityIndicator
@@ -7755,6 +7754,8 @@ function Segment({ active, label, onPress }: { active: boolean; label: string; o
 function SheetModal({
   visible,
   title,
+  headerSubtitle,
+  headerActions,
   children,
   onClose,
   onDismiss,
@@ -7768,6 +7769,8 @@ function SheetModal({
 }: {
   visible: boolean;
   title: string;
+  headerSubtitle?: string;
+  headerActions?: React.ReactNode;
   children: React.ReactNode;
   onClose: () => void;
   onDismiss?: () => void;
@@ -7980,12 +7983,22 @@ function SheetModal({
                     </View>
                   )}
                   <View style={styles.sheetHeader}>
-                    <Text style={styles.sheetTitle} numberOfLines={1}>
-                      {title}
-                    </Text>
-                    <Pressable accessibilityLabel={`Close ${title}`} style={styles.iconButton} onPress={closeSheet}>
-                      <X size={18} color={theme.colors.text} />
-                    </Pressable>
+                    <View style={styles.sheetHeaderTitleBlock}>
+                      <Text style={styles.sheetTitle} numberOfLines={1}>
+                        {title}
+                      </Text>
+                      {headerSubtitle ? (
+                        <Text style={styles.sheetHeaderSubtitle} numberOfLines={1}>
+                          {headerSubtitle}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.sheetHeaderActions}>
+                      {headerActions}
+                      <Pressable accessibilityLabel={`Close ${title}`} style={styles.iconButton} onPress={closeSheet}>
+                        <X size={18} color={theme.colors.text} />
+                      </Pressable>
+                    </View>
                   </View>
                 </View>
               )}
@@ -10257,13 +10270,30 @@ function createStyles(
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
   },
-  sheetTitle: {
+  sheetHeaderTitleBlock: {
     flex: 1,
+    minWidth: 0,
+  },
+  sheetTitle: {
     minWidth: 0,
     ...theme.typography.section,
     color: theme.colors.text,
     fontSize: 17,
     lineHeight: 22,
+  },
+  sheetHeaderSubtitle: {
+    ...theme.typography.meta,
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    lineHeight: 14,
+    marginTop: 1,
+    textTransform: "capitalize",
+  },
+  sheetHeaderActions: {
+    flexShrink: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
   sheetMeta: {
     width: "100%",
@@ -10394,35 +10424,11 @@ function createStyles(
     color: theme.colors.danger,
     textAlign: "center",
   },
-  sessionScreenMetaBar: {
-    width: "100%",
-    minWidth: 0,
-    minHeight: 42,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  sessionScreenMetaTextBlock: {
-    flex: 1,
-    minWidth: 0,
-  },
-  sessionScreenEyebrow: {
-    ...theme.typography.meta,
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    lineHeight: 14,
-  },
-  sessionScreenStatus: {
-    ...theme.typography.meta,
-    color: theme.colors.text,
-    marginTop: 1,
-    textTransform: "capitalize",
-  },
   sessionScreenActions: {
     flexShrink: 0,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 6,
   },
   sessionZoomLabel: {
     ...theme.typography.meta,
@@ -10432,8 +10438,8 @@ function createStyles(
     fontVariant: ["tabular-nums"],
   },
   sessionFilesButton: {
-    width: 44,
-    height: 44,
+    width: 36,
+    height: 36,
     flexShrink: 0,
     borderRadius: theme.radii.md,
     backgroundColor: theme.colors.surfaceRaised,
