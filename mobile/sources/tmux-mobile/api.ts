@@ -231,6 +231,44 @@ export class TmuxMobileApi {
     return this.request("/api/pins");
   }
 
+  async artifactText(rawUrl: string, signal?: AbortSignal): Promise<string> {
+    const target = new URL(rawUrl, this.baseUrl);
+    if (
+      target.origin !== this.baseUrl ||
+      !["/pin", "/api/pin"].includes(target.pathname)
+    ) {
+      throw new ApiError("Refusing to send the session token to another origin");
+    }
+    let response: Response;
+    try {
+      response = await fetch(target, {
+        headers: {
+          accept: "text/plain, text/markdown, application/json",
+          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+        },
+        signal,
+      });
+    } catch (error) {
+      throw new ApiError(
+        `Could not connect to ${this.baseUrl}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const text = await response.text().catch(() => "");
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`;
+      try {
+        const data = JSON.parse(text) as { error?: unknown };
+        if (data.error) message = String(data.error);
+      } catch {
+        // Keep the HTTP status for non-JSON failures.
+      }
+      throw new ApiError(message, response.status, text);
+    }
+    return text;
+  }
+
   pinInlineArtifact(input: {
     machineId?: string;
     text: string;
