@@ -11,6 +11,7 @@ import {
 import { windowKey, windowStableId, windowDescriptor, windowTitleText, windowHoverDetail, mergeRecent, pruneRecent } from "./window-id.js";
 import { fetchJsonWithTimeout } from "./fetch-timeout.js";
 import { filterWindowTree, flattenWindowTree, splitRedundantPrefix } from "./window-filter.js";
+import { ATTENTION_RANK as ATTN_RANK, attentionReason } from "./window-attention.js";
 
 const SNAPSHOT_BOTTOM_SLOP_PX = 8;
 const MAX_WAVEFORM_SAMPLES = 40;
@@ -218,23 +219,17 @@ function activeWindowKey() {
 function descriptorNeedsAttention(d, activeKey) {
   const key = attentionKey(d);
   if (key === activeKey) return null;
-  if (d.waitingForInput) {
-    // Low-confidence "maybe blocked" → unverified, not a confident question.
-    return d.waitingConfidence === "low" ? "unverified" : "question";
-  }
   const seen = seenHashesAtom.get().byKey[key];
-  const unread = seen !== undefined && d.contentHash && seen !== d.contentHash;
-  if (d.turn === "idle" && unread) return "finished";
-  // Turn couldn't be confirmed but the content changed: we can't claim it
-  // finished, but something happened we haven't seen — surface as unverified.
-  if (d.turn === "unverified" && unread) return "unverified";
-  return null;
+  const unread = Boolean(seen !== undefined && d.contentHash && seen !== d.contentHash);
+  // Shared with the desktop sidebar's "Needs you" group (window-attention.js)
+  // so the two surfaces can never disagree about the same window.
+  return attentionReason(d, unread);
 }
 
 // Rank order for attention reasons (lower = more urgent). Drives which window the
-// pill jumps to and how the pill summarizes the set. "unverified" is always last:
-// honest hedge, never ranked above a confirmed need.
-const ATTENTION_RANK = { question: 0, finished: 1, unverified: 2 };
+// pill jumps to and how the pill summarizes the set. Defined once in
+// window-attention.js alongside the predicate that produces these reasons.
+const ATTENTION_RANK = ATTN_RANK;
 
 // All windows (across ALL machines) currently needing attention, with reason —
 // drives the topbar pill, the tab-title/favicon badge, and the jump-on-tap.
@@ -1641,16 +1636,23 @@ function buildWindowTree() {
   return repoList;
 }
 
-// Local-machine windows that need you: confident asks first, then unread. The
-// current window is never listed (you're looking at it). Same signals as the
-// row chips, so the group and the chips can't disagree.
+// Local-machine windows that need you: confident asks first, then finished
+// turns, then unverified hedges. The current window is never listed (you're
+// looking at it) — excluded by STABLE key, not the ephemeral tmux window id,
+// so it matches what the topbar pill considers "active".
+//
+// The predicate lives in window-attention.js and is shared with the pill / tab
+// badge. It used to be re-implemented here as "waiting OR unread", which listed
+// an agent that was still STREAMING output: contentHash changes every frame, so
+// unread stays true for the whole time an agent is working. Unread only means
+// "needs you" once the turn is actually over.
 function windowsForAttentionGroup() {
+  const activeKey = activeWindowKey();
   const out = [];
   for (const win of state.windows) {
-    if (win.id === state.windowId) continue;
-    const meta = state.windowMetadata[win.id] || {};
-    if (Boolean(meta.waitingForInput) && meta.waitingConfidence !== "low") out.push({ win, rank: 0 });
-    else if (isWindowUnread(win)) out.push({ win, rank: 1 });
+    if (windowRecentKey(win) === activeKey) continue;
+    const reason = attentionReason(state.windowMetadata[win.id], isWindowUnread(win));
+    if (reason) out.push({ win, rank: ATTN_RANK[reason] });
   }
   return out.sort((a, b) => a.rank - b.rank || a.win.index - b.win.index).map((entry) => entry.win);
 }
