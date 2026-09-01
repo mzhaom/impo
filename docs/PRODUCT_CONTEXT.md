@@ -326,16 +326,37 @@ The overlay parses the visible pane once, renders options/free-form fields, asks
 for confirmation, then drives the real TUI with keystrokes. It is contextual and
 should not permanently reserve vertical space in the default window view.
 
-### 3h. Target Picker And Window Management
+### 3h. Window List And Window Management
 
-The full target picker is an all-window sheet:
+The window list is one element rendered two ways: a bottom sheet on phones
+(opened from the title pill) and, at 900px and wider, a persistent left column
+beside the terminal that folds to a 40px rail (fold button, Ctrl/⌘+B; state
+persists per browser). Contents, top to bottom:
 
-- machine picker in controller mode,
-- session groups,
-- compact window rows with live/unread/agent/turn state, branch/cwd signal, summary,
-  and note,
-- no Recent section; recents live only in the topbar popup,
-- create new session/window affordances.
+- header: machine picker in controller mode, refresh, new session (reveals the
+  name field), fold (desktop) / close (phone),
+- filter field: type-to-jump over repo, directory, branch, window name, index,
+  session, note, agent (Ctrl/⌘+K focuses it; ↑↓ move a cursor, Enter switches,
+  Esc clears),
+- "Pinned" group: windows the user pinned from a row's pin control (desktop
+  only; persisted per browser, keyed by machine+session+index),
+- "Needs you" group: windows whose agent is asking a question, then unread ones;
+  hidden when empty,
+- repo → directory → windows tree. Repo header carries the short repo name and
+  count; directory header carries the cwd basename, branch (only when it differs
+  from the directory name) and a linked-worktree marker,
+- one line per window: index, name (the part repeating the directory header is
+  dimmed), session chip only when the directory spans several tmux sessions,
+  running command (omitted when it repeats the agent chip), unread dot, agent
+  chip with turn glyph, live badge. A set note is a second muted line; an empty
+  note renders nothing. Hover/focus reveals edit-note and pin; right-click or the
+  pencil edits the note inline (Enter saves, Esc cancels),
+- desktop footer: New window, Duplicate, Transcript, and the Alt+↑/↓ prev/next
+  hint,
+- no Recent section; recents live only in the topbar popup.
+
+Picking a window closes the phone sheet and clears the filter; on desktop the
+column stays open.
 
 Window actions:
 
@@ -344,7 +365,7 @@ Window actions:
 - New branch for bare-repo-backed git worktrees,
 - Rename,
 - Close with confirmation,
-- Note editing from picker or snapshot toolbar,
+- Note editing inline in the window list, or from the snapshot toolbar,
 - Directories picker to `cd`,
 - Fork agent.
 
