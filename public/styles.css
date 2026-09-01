@@ -2003,17 +2003,17 @@ input {
 .target-panel {
   position: absolute;
   inset: auto 0 0 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   height: 96dvh;
   max-height: 96dvh;
   min-height: 0;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
-  gap: 12px;
+  gap: 10px;
   overflow: hidden;
   border-radius: 8px 8px 0 0;
   background: var(--surface);
-  padding: 14px;
-  padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  padding: 12px 14px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
   box-shadow: 0 -18px 38px rgba(15, 20, 24, 0.2);
 }
 
@@ -2382,13 +2382,26 @@ input {
   padding: 7px 8px;
 }
 
+/* ---- Window switcher list: repo -> directory -> one-line window rows ----
+   One row per window (~34px) instead of a two-line card plus a note row: index
+   in mono, name with the part that repeats the directory header dimmed, the
+   running command muted at the right, then the unread dot / agent chip / live
+   badge the rest of the app already uses. A set note is a second muted line;
+   an empty note renders nothing (edit via the pencil, or long-press). */
+.list.window-list {
+  gap: 2px;
+}
+.list.window-list > * {
+  flex-shrink: 0;
+}
+
 .window-group-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  margin: 12px 2px 5px;
-  padding-bottom: 4px;
+  margin: 10px 2px 3px;
+  padding-bottom: 3px;
   border-bottom: 1px solid var(--line);
   font-size: 11px;
   font-weight: 800;
@@ -2406,11 +2419,10 @@ input {
   text-transform: none;
   letter-spacing: 0;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
-/* Repo group header (top level of the switcher tree). Slightly stronger than a
-   plain session header — it's the primary grouping now (repo -> dir -> windows).
-   The short repo name (e.g. "kernel") reads as the section title. */
+/* Repo group header (top level of the switcher tree). */
 .window-repo-header {
   font-size: 12px;
 }
@@ -2418,15 +2430,22 @@ input {
   color: var(--muted);
   border-bottom-style: dashed;
 }
+/* "Pinned" (user-chosen, desktop) and "Needs you" (asking / unread) groups sit
+   above the repo tree so the likeliest next switch is the first row. */
+.window-pin-header {
+  color: var(--accent-dark);
+}
+.window-attn-header {
+  color: var(--danger);
+}
 
-/* Directory sub-header: the working copy under a repo (its cwd basename), with
-   an optional branch chip. Indented under the repo, quieter than the repo row.
-   Multiple sibling worktrees of one repo appear as sibling directory rows. */
+/* Directory sub-header: cwd basename plus branch chip when it adds info. */
 .window-dir-header {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  margin: 6px 2px 3px 12px;
+  min-width: 0;
+  margin: 5px 2px 2px 8px;
   font-size: 11px;
   color: var(--muted);
 }
@@ -2450,66 +2469,246 @@ input {
   opacity: 0.85;
 }
 
-/* Windows are nested one level under their directory. A left rail ties the
-   window rows to the directory they belong to. */
-.window-item-nested {
-  margin-left: 12px;
-  width: calc(100% - 12px);
-  border-left: 2px solid var(--line);
-  padding-left: 10px;
-}
-.window-item-nested-row {
-  margin-left: 12px;
-  width: calc(100% - 12px);
-}
-.window-item-nested-row .window-item-nested {
-  margin-left: 0;
-  width: 100%;
-}
-
-/* Per-window follow-up note, shown indented under its window button. Reads as a
-   sticky note when set, a subtle "+ add note" when empty. */
-.window-annotation {
+/* rmux: the row sits beside its share button. */
+.window-row-wrap {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 6px;
-  width: calc(100% - 14px);
-  margin: -2px 0 8px 14px;
-  padding: 5px 8px;
-  border: 1px dashed var(--line);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-  white-space: normal;
-  word-break: break-word;
+  min-width: 0;
 }
-
-.window-annotation:not(.has-note) {
-  opacity: 0.6; /* keep the empty "+ add note" affordance quiet */
-}
-
-.window-annotation.has-note {
-  border-style: solid;
-  background: var(--surface-soft);
-  color: var(--ink);
-  opacity: 1;
-}
-
-.window-annotation-icon {
-  flex: 0 0 auto;
-  font-size: 12px;
-}
-
-.window-annotation-text {
+.window-row-wrap > .window-row {
   flex: 1 1 auto;
   min-width: 0;
 }
+.window-row-wrap .window-share-button {
+  flex: 0 0 34px;
+}
 
-.window-annotation:hover {
-  border-color: var(--accent, #6c88a6);
+.window-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: calc(100% - 8px);
+  margin-left: 8px;
+  min-height: 34px;
+  padding: 5px 6px 5px 8px;
+  border: 1px solid transparent;
+  border-left: 2px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.window-row:hover,
+.window-row:focus-visible {
+  background: var(--surface-soft);
+  border-color: var(--line);
+  outline: none;
+}
+.window-row:focus-visible {
+  border-color: var(--accent);
+}
+.window-row.active {
+  background: #e9f3ef;
+  border-color: var(--accent);
+  border-left-color: var(--accent);
+}
+/* Keyboard cursor while typing in the filter (↑↓ then Enter). */
+.window-row.kb-selected {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.window-row-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  width: 100%;
+}
+.window-row-idx {
+  flex: 0 0 auto;
+  min-width: 16px;
+  text-align: right;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.window-row-name {
+  flex: 1 1 auto;
+  min-width: 5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  font-size: 13px;
+}
+.window-row-name .window-row-dim {
+  font-weight: 500;
+  color: var(--muted);
+}
+.window-row.unread .window-row-name {
+  color: var(--accent-dark);
+}
+.window-row-sess {
+  flex: 0 4 auto;
+  min-width: 3ch;
+  max-width: 10ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.window-row-spacer {
+  flex: 0 0 0;
+}
+.window-row-cmd {
+  flex: 0 4 auto;
+  min-width: 0;
+  max-width: 10ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+/* Row tools (edit note, pin): quiet until the row is hovered/focused. */
+.window-row-tool {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  opacity: 0.35;
+  cursor: pointer;
+}
+.window-row-tool svg {
+  width: 12px;
+  height: 12px;
+}
+.window-row:hover .window-row-tool,
+.window-row:focus-within .window-row-tool,
+.window-row-tool:focus-visible {
+  opacity: 1;
+}
+.window-row-tool:hover,
+.window-row-tool:focus-visible {
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+}
+.window-row-tool.is-pinned {
+  opacity: 1;
+  color: var(--accent-dark);
+}
+.window-row-tool.is-pinned svg {
+  fill: currentColor;
+}
+@media (hover: none) {
+  .window-row-tool {
+    opacity: 0.55;
+  }
+}
+/* With a pointer, the tools float over the row's right edge only while it is
+   hovered/focused, so idle rows spend no width on them (the column is 300px). */
+@media (hover: hover) {
+  .window-row-tools {
+    position: absolute;
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%);
+    display: flex;
+    gap: 2px;
+    padding: 2px 3px;
+    border-radius: 6px;
+    background: var(--surface-soft);
+    box-shadow: var(--shadow);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .window-row.active .window-row-tools {
+    background: #e9f3ef;
+  }
+  html:not([data-theme="kami"]) .window-row.active .window-row-tools {
+    background: #1f2638;
+  }
+  .window-row:hover .window-row-tools,
+  .window-row:focus-within .window-row-tools {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .window-row-tools .window-row-tool {
+    opacity: 0.7;
+  }
+  .window-row.with-note .window-row-tools {
+    top: 17px;
+  }
+}
+/* Pinning is a desktop (left pane) feature; the phone sheet hides the control
+   but still lists pinned windows. */
+.window-row-pin {
+  display: none;
+}
+body.sidebar-layout .window-row-pin {
+  display: inline-grid;
+}
+.window-row-note {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding-left: 23px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.window-row-note svg {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+}
+.window-row-note-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.window-row-note-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 23px;
+}
+.window-row-note-edit input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--code-ink);
+}
+.window-row-note-edit kbd {
+  font: inherit;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 /* The current window's note in the snapshot toolbar, right after the Lines
@@ -2958,4 +3157,204 @@ input,
 
 .target-panel {
   box-shadow: 0 -18px 38px rgba(0, 0, 0, 0.6);
+}
+
+/* ---- Window panel chrome (shared by the phone sheet and desktop sidebar) ---- */
+.target-panel-actions {
+  gap: 6px;
+}
+.target-panel-actions .icon-button {
+  width: 32px;
+  height: 32px;
+}
+.target-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.target-panel-row .machine-picker {
+  flex: 0 1 44%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.target-panel-row .machine-picker select {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.window-filter {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--code-bg);
+  color: var(--muted);
+}
+.window-filter:focus-within {
+  border-color: var(--accent);
+}
+.window-filter svg {
+  flex: 0 0 auto;
+}
+.window-filter input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--code-ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 0;
+  outline: none;
+}
+.window-filter-hint {
+  flex: 0 0 auto;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+@media (hover: none) {
+  .window-filter-hint {
+    display: none;
+  }
+}
+.mobile-target-groups {
+  flex: 1 1 auto;
+}
+/* Elements that only exist in one of the two layouts. */
+.sidebar-only {
+  display: none;
+}
+.sidebar-toggle {
+  position: relative;
+}
+.sidebar-toggle .icon-unfold {
+  display: none;
+}
+.sidebar-toggle-count {
+  display: none;
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  border-radius: 999px;
+  padding: 1px 4px;
+  background: #fde8e8;
+  color: #b3261e;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+.sidebar-foot {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.sidebar-foot .small-button {
+  padding: 5px 8px;
+  font-size: 11px;
+}
+.sidebar-foot-hint {
+  margin-left: auto;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* Hairline separators between More-menu groups (no labels: vertical space). */
+.more-actions-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--line);
+}
+
+/* ---- Desktop sidebar: at >= 900px the window list is a left column of the
+   app-shell grid instead of a bottom sheet. Same DOM, same render path; only
+   position/width change, plus body.sidebar-collapsed folds it to a 40px rail
+   (app.js::syncSidebarMode keeps the JS state and ARIA in step). ---- */
+@media (min-width: 900px) {
+  .app-shell {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .app-shell > .target-sheet {
+    display: flex;
+    grid-column: 1;
+    grid-row: 1 / span 3;
+    position: static;
+    inset: auto;
+    z-index: auto;
+    width: 300px;
+    min-height: 0;
+  }
+  .app-shell > .target-sheet .target-backdrop {
+    display: none;
+  }
+  .app-shell > .target-sheet .target-panel,
+  html:not([data-theme="kami"]) .app-shell > .target-sheet .target-panel {
+    position: static;
+    inset: auto;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: var(--shadow);
+  }
+  .mobile-topbar,
+  .snapshot-panel,
+  .control-panel {
+    grid-column: 2;
+  }
+  .sidebar-only {
+    display: inline-flex;
+  }
+  .sheet-only {
+    display: none;
+  }
+  .sidebar-foot {
+    display: flex;
+  }
+  body.sidebar-collapsed .app-shell > .target-sheet {
+    width: 40px;
+  }
+  body.sidebar-collapsed .app-shell > .target-sheet .target-panel {
+    padding: 6px 0;
+    align-items: center;
+  }
+  body.sidebar-collapsed .target-panel > :not(.target-panel-header),
+  body.sidebar-collapsed .target-panel-header h2,
+  body.sidebar-collapsed .target-panel-actions > :not(.sidebar-toggle),
+  body.sidebar-collapsed .sidebar-toggle .icon-fold {
+    display: none;
+  }
+  body.sidebar-collapsed .sidebar-toggle .icon-unfold {
+    display: block;
+  }
+  body.sidebar-collapsed .sidebar-toggle-count:not([hidden]) {
+    display: inline-block;
+  }
+  .snapshot-fullscreen .app-shell > .target-sheet {
+    display: none;
+  }
+}
+
+html:not([data-theme="kami"]) .window-row.active {
+  background: #1f2638;
+}
+html:not([data-theme="kami"]) .sidebar-toggle-count {
+  background: rgba(179, 38, 30, 0.3);
+  color: #f28b84;
 }
