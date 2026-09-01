@@ -38,6 +38,76 @@
   </head>
   <body>
     <main class="app-shell">
+      <!-- Window switcher. On phones this is a bottom sheet opened from the
+           title pill; at >= 900px (see styles.css "Desktop sidebar") the same
+           element renders as a persistent, collapsible left column of the
+           app-shell grid. It lives inside .app-shell for that grid placement;
+           on phones it is position:fixed so the DOM position is irrelevant.
+           app.js::syncSidebarMode swaps the dialog/complementary semantics. -->
+      <div id="targetSheet" class="target-sheet" hidden>
+        <button id="targetBackdrop" class="target-backdrop" type="button" aria-label="Close window list"></button>
+        <section class="target-panel" role="dialog" aria-modal="true" aria-labelledby="targetSheetTitle">
+          <div class="target-panel-header">
+            <h2 id="targetSheetTitle">Windows</h2>
+            <div class="target-panel-actions">
+              <button id="mobileRefreshTree" class="icon-button" type="button" title="Refresh windows" aria-label="Refresh windows">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+              </button>
+              <button id="toggleNewSession" class="icon-button" type="button" title="New session" aria-label="New session" aria-expanded="false" aria-controls="sessionManagement">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+              <button id="sidebarToggle" class="icon-button sidebar-only sidebar-toggle" type="button" title="Collapse window list (Ctrl+B)" aria-label="Collapse window list" aria-expanded="true">
+                <svg class="icon-fold" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>
+                <svg class="icon-unfold" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>
+                <span id="sidebarToggleCount" class="sidebar-toggle-count" hidden aria-label="Windows that need you"></span>
+              </button>
+              <button id="closeTargetPicker" class="icon-button sheet-only" type="button" title="Close" aria-label="Close window list">X</button>
+            </div>
+          </div>
+
+          <div class="target-panel-row">
+            <label id="machinePicker" class="machine-picker" hidden>
+              <span class="sr-only">Machine</span>
+              <select id="machineSelect" aria-label="Machine"></select>
+            </label>
+            <!-- Type-to-jump filter over repo / directory / branch / name /
+                 index / session / note. Ctrl+K (⌘K) focuses it; ↑↓ move a
+                 cursor, Enter switches, Esc clears. -->
+            <label class="window-filter">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input id="windowFilterInput" type="search" placeholder="Filter windows" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Filter windows" enterkeyhint="go" />
+              <kbd id="windowFilterHint" class="window-filter-hint" aria-hidden="true">Ctrl K</kbd>
+            </label>
+          </div>
+
+          <!-- Hidden until the "+" in the header is tapped. -->
+          <div id="sessionManagement" class="session-management" aria-label="Create session" hidden>
+            <label class="session-name-field">
+              <span class="sr-only">New session name</span>
+              <input id="sessionNameInput" type="text" autocomplete="off" placeholder="new session name" />
+            </label>
+            <div class="session-actions">
+              <button id="createSession" class="small-button" type="button">New</button>
+            </div>
+          </div>
+
+          <div class="mobile-target-groups">
+            <section class="target-group">
+              <div id="mobileWindows" class="list mobile-list window-list"></div>
+            </section>
+          </div>
+
+          <!-- Desktop-only footer: the window actions used most, so the More
+               menu is not the only way to reach them from the keyboard side. -->
+          <div class="sidebar-foot sidebar-only">
+            <button id="sidebarNewWindow" class="small-button" type="button">New window</button>
+            <button id="sidebarDuplicateWindow" class="small-button" type="button">Duplicate</button>
+            <button id="sidebarTranscript" class="small-button" type="button">Transcript</button>
+            <span class="sidebar-foot-hint" title="Previous / next window">Alt ↑↓</span>
+          </div>
+        </section>
+      </div>
+
       <header class="mobile-topbar">
         <button id="openTargetPicker" class="target-pill" type="button">
           <strong id="mobileTargetLabel">No window selected</strong>
@@ -112,6 +182,7 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
               <span>Close window</span>
             </button>
+            <div class="more-actions-sep" role="separator"></div>
             <button id="openDirectoryPicker" class="more-actions-item directory-trigger" type="button" role="menuitem">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
               <span>Directories</span>
@@ -124,10 +195,6 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
               <span>Refresh</span>
             </button>
-            <button id="themeToggle" class="more-actions-item" type="button" role="menuitem">
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18Z" fill="currentColor" stroke="none"/></svg>
-              <span>Toggle theme</span>
-            </button>
             <button id="showTranscript" class="more-actions-item" type="button" role="menuitem" title="Show every user prompt + assistant response from the agent's own transcript">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
               <span>Transcript</span>
@@ -136,10 +203,11 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
               <span>Command Center</span>
             </a>
-            <a href="/auth/logout" class="more-actions-item" role="menuitem" title="Sign out and choose a different Google account">
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
-              <span>Logout</span>
-            </a>
+            <div class="more-actions-sep" role="separator"></div>
+            <button id="themeToggle" class="more-actions-item" type="button" role="menuitem">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18Z" fill="currentColor" stroke="none"/></svg>
+              <span>Toggle theme</span>
+            </button>
             <button id="openVoiceSettings" class="more-actions-item" type="button" role="menuitem">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
               <span>Voice settings</span>
@@ -155,6 +223,11 @@
                 <span id="fontSizeValue" aria-live="polite">13</span>
                 <button id="fontSizeIncrease" class="font-size-button" type="button" aria-label="Larger terminal font">A+</button>
               </div>
+            <div class="more-actions-sep" role="separator"></div>
+            <a href="/auth/logout" class="more-actions-item" role="menuitem" title="Sign out and choose a different Google account">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+              <span>Logout</span>
+            </a>
             </div>
           </div>
         </div>
@@ -369,41 +442,6 @@
         </div>
 
         <div id="pinsList" class="pins-list" aria-label="Pinned artifacts"></div>
-      </section>
-    </div>
-
-    <div id="targetSheet" class="target-sheet" hidden>
-      <button id="targetBackdrop" class="target-backdrop" type="button" aria-label="Close target picker"></button>
-      <section class="target-panel" role="dialog" aria-modal="true" aria-labelledby="targetSheetTitle">
-        <div class="target-panel-header">
-          <h2 id="targetSheetTitle">Switch Target</h2>
-          <button id="closeTargetPicker" class="icon-button" type="button" title="Close">X</button>
-        </div>
-
-        <div class="target-panel-actions">
-          <button id="mobileRefreshTree" class="small-button" type="button">Refresh</button>
-        </div>
-
-        <label id="machinePicker" class="machine-picker" hidden>
-          <span>Machine</span>
-          <select id="machineSelect"></select>
-        </label>
-
-        <div class="session-management" aria-label="Create session">
-          <label class="session-name-field">
-            <span>New</span>
-            <input id="sessionNameInput" type="text" autocomplete="off" placeholder="new session name" />
-          </label>
-          <div class="session-actions">
-            <button id="createSession" class="small-button" type="button">New</button>
-          </div>
-        </div>
-
-        <div class="mobile-target-groups">
-          <section class="target-group">
-            <div id="mobileWindows" class="list mobile-list"></div>
-          </section>
-        </div>
       </section>
     </div>
 

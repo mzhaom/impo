@@ -1,0 +1,584 @@
+<!-- IMPO UI polish mockup, September 2026. Self-contained: no build, no external
+     assets except Google Fonts for the document chrome. Product frames use the
+     real tokens from public/styles.css so the mock reads as the shipped app.
+     Open directly in a browser, or publish as an Artifact. -->
+<title>IMPO Switcher Redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* ---------- tokens: product palette (public/styles.css) + doc redline ---------- */
+  :root {
+    color-scheme: light;
+    --bg: #ffffff; --surface: #fbfbfa; --surface-soft: #f1f1ef;
+    --ink: #37352f; --muted: #787774; --line: rgba(55, 53, 47, 0.09);
+    --accent: #2383e2; --accent-dark: #1a6cbd; --accent-blue: #6c88a6; --danger: #eb5d4c;
+    --code-bg: #f7f6f3; --code-ink: #37352f; --shadow: 0 1px 3px rgba(15, 15, 15, 0.05);
+    --active-bg: #e9f3ef;
+    --chip-claude-bg: #f3e7df; --chip-claude-ink: #b5530f;
+    --chip-codex-bg: #e3e9f5; --chip-codex-ink: #2f5bb7;
+    --chip-ask-bg: #fde8e8; --chip-ask-ink: #b3261e;
+    --badge-bg: #e6e9ef; --badge-ink: #344258; --badge-green-bg: #dcefe8;
+    --term-bg: #f7f6f3; --term-ink: #37352f;
+    /* doc chrome */
+    --doc-bg: #f6f5f2; --doc-ink: #26241f; --doc-muted: #6f6b62; --doc-line: #dcd9d1;
+    --red: #b8730f; --red-bg: #fff3df; --red-ink: #5a3a06;
+    --ok: #2c7a3e; --later: #6f6b62;
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-doc: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #191919; --surface: #202020; --surface-soft: #2a2a2a;
+      --ink: rgba(255, 255, 255, 0.81); --muted: rgba(255, 255, 255, 0.46); --line: rgba(255, 255, 255, 0.094);
+      --accent: #529cca; --accent-dark: #3b6fc9; --accent-blue: #4f8df8;
+      --code-bg: #2a2a2a; --code-ink: rgba(255, 255, 255, 0.85); --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      --active-bg: rgba(82, 156, 202, 0.16);
+      --chip-claude-bg: rgba(181, 83, 15, 0.22); --chip-claude-ink: #f0a36e;
+      --chip-codex-bg: rgba(47, 91, 183, 0.25); --chip-codex-ink: #9fbaf0;
+      --chip-ask-bg: rgba(179, 38, 30, 0.25); --chip-ask-ink: #f28b84;
+      --badge-bg: rgba(255,255,255,0.1); --badge-ink: rgba(255,255,255,0.75); --badge-green-bg: rgba(60, 140, 100, 0.25);
+      --term-bg: #141414; --term-ink: rgba(255,255,255,0.8);
+      --doc-bg: #121211; --doc-ink: #e8e5de; --doc-muted: #9c978c; --doc-line: #2c2b28;
+      --red: #e0a23a; --red-bg: #2a2114; --red-ink: #f5d9a6;
+      --ok: #7ccb8f; --later: #9c978c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #191919; --surface: #202020; --surface-soft: #2a2a2a;
+    --ink: rgba(255, 255, 255, 0.81); --muted: rgba(255, 255, 255, 0.46); --line: rgba(255, 255, 255, 0.094);
+    --accent: #529cca; --accent-dark: #3b6fc9; --accent-blue: #4f8df8;
+    --code-bg: #2a2a2a; --code-ink: rgba(255, 255, 255, 0.85); --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --active-bg: rgba(82, 156, 202, 0.16);
+    --chip-claude-bg: rgba(181, 83, 15, 0.22); --chip-claude-ink: #f0a36e;
+    --chip-codex-bg: rgba(47, 91, 183, 0.25); --chip-codex-ink: #9fbaf0;
+    --chip-ask-bg: rgba(179, 38, 30, 0.25); --chip-ask-ink: #f28b84;
+    --badge-bg: rgba(255,255,255,0.1); --badge-ink: rgba(255,255,255,0.75); --badge-green-bg: rgba(60, 140, 100, 0.25);
+    --term-bg: #141414; --term-ink: rgba(255,255,255,0.8);
+    --doc-bg: #121211; --doc-ink: #e8e5de; --doc-muted: #9c978c; --doc-line: #2c2b28;
+    --red: #e0a23a; --red-bg: #2a2114; --red-ink: #f5d9a6;
+    --ok: #7ccb8f; --later: #9c978c;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--doc-bg); color: var(--doc-ink); font-family: var(--font-doc); font-size: 15px; line-height: 1.5; }
+  a { color: inherit; }
+  code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
+  h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; margin: 0; }
+  h1 { font-size: 30px; line-height: 1.15; }
+  h2 { font-size: 21px; }
+  h3 { font-size: 15px; }
+  p { margin: 0; max-width: 68ch; }
+
+  /* ---------- page layout: sticky rail + sections ---------- */
+  .page { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 40px; max-width: 1560px; margin: 0 auto; padding: 36px 32px 96px; }
+  .rail { position: sticky; top: 24px; align-self: start; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .rail a { text-decoration: none; color: var(--doc-muted); padding: 4px 8px; border-left: 2px solid transparent; }
+  .rail a:hover, .rail a:focus-visible { color: var(--doc-ink); border-left-color: var(--red); outline: none; }
+  .rail .eyebrow { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--doc-muted); padding: 0 8px; margin-bottom: 8px; }
+  .main { display: flex; flex-direction: column; gap: 64px; min-width: 0; }
+  header.intro { display: grid; gap: 14px; max-width: 76ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 10px 18px; font-family: var(--font-mono); font-size: 12px; color: var(--doc-muted); }
+  section { display: grid; gap: 18px; scroll-margin-top: 24px; }
+  .sec-head { display: grid; gap: 6px; }
+  .sec-head .eyebrow { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--red); }
+  .frames { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+  .frame-wrap { display: grid; gap: 10px; position: relative; }
+  .frames > .notes, .frames > .spec { flex: 1 1 320px; min-width: 300px; }
+  .frame-label { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--doc-muted); }
+  .frame-label strong { color: var(--doc-ink); font-weight: 600; }
+  .wide { overflow-x: auto; padding-bottom: 8px; }
+
+  /* callouts */
+  .notes { display: grid; gap: 8px; max-width: 64ch; padding: 0; margin: 0; list-style: none; counter-reset: n; }
+  .notes li { position: relative; padding-left: 32px; font-size: 14px; }
+  .notes li::before { counter-increment: n; content: counter(n); position: absolute; left: 0; top: 2px; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--red); color: #fff; font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
+  .pin { position: absolute; z-index: 5; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--red); color: #fff; font-family: var(--font-mono); font-size: 11px; font-weight: 500; box-shadow: 0 0 0 2px var(--doc-bg); pointer-events: none; }
+  .tag { display: inline-block; font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 3px; border: 1px solid currentColor; }
+  .tag.proposed { color: var(--ok); }
+  .tag.later { color: var(--later); }
+  .tag.redline { color: var(--red); }
+  .measure { font-family: var(--font-mono); font-size: 12px; color: var(--red-ink); background: var(--red-bg); border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+  table.spec { border-collapse: collapse; font-size: 13.5px; width: 100%; max-width: 78ch; }
+  table.spec th, table.spec td { text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--doc-line); vertical-align: top; }
+  table.spec th { font-weight: 600; font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--doc-muted); }
+  .checklist { display: grid; gap: 10px; max-width: 70ch; padding: 0; margin: 0; list-style: none; }
+  .checklist li { display: grid; grid-template-columns: 18px 1fr; gap: 12px; align-items: start; font-size: 14px; }
+  .checklist li::before { content: ""; width: 14px; height: 14px; margin-top: 4px; border: 1.5px solid var(--doc-muted); border-radius: 3px; }
+
+  /* ---------- product frames ---------- */
+  .ui { font-family: var(--font-ui); color: var(--ink); background: var(--bg); position: relative; }
+  .phone { width: 390px; height: 720px; border: 1px solid var(--doc-line); border-radius: 14px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.12); display: flex; flex-direction: column; }
+  .desktop { width: 1280px; border: 1px solid var(--doc-line); border-radius: 10px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.12); }
+  .desktop.short { height: 380px; }
+  .desktop:not(.short) { height: 720px; }
+
+  /* sheet header (current product) */
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; }
+  .sheet-head h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 700; font-family: var(--font-ui); }
+  .icon-btn { width: 30px; height: 30px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 12px; }
+  .icon-btn svg { width: 15px; height: 15px; }
+  .small-btn { border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 11px; padding: 5px 9px; font-weight: 600; }
+  .row-ctl { display: flex; gap: 8px; align-items: center; padding: 0 14px; }
+  .field { flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--code-bg); padding: 6px 10px; font-size: 12px; color: var(--muted); }
+  .field .k { margin-left: auto; font-family: var(--font-mono); font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  .field.select::after { content: "⌄"; margin-left: auto; }
+  .list { flex: 1; overflow: hidden; padding: 6px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .list.dense { gap: 2px; }
+
+  /* group headers */
+  .g-repo { display: flex; justify-content: space-between; align-items: baseline; margin: 12px 2px 5px; padding-bottom: 4px; border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
+  .g-repo:first-child { margin-top: 2px; }
+  .g-repo .cnt { font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--muted); }
+  .g-repo.none { color: var(--muted); border-bottom-style: dashed; }
+  .g-dir { display: flex; align-items: baseline; gap: 8px; margin: 6px 2px 3px 12px; font-size: 11px; color: var(--muted); }
+  .g-dir b { color: var(--ink); font-weight: 700; }
+  .dense .g-repo { margin: 8px 2px 3px; }
+  .dense .g-dir { margin: 5px 2px 2px 8px; }
+  .g-attn { display: flex; align-items: baseline; gap: 8px; margin: 2px 2px 3px; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--chip-ask-ink); }
+
+  /* current (before) row */
+  .item { width: calc(100% - 12px); margin-left: 12px; border: 1px solid var(--line); border-left: 2px solid var(--line); border-radius: 8px; background: var(--surface); padding: 10px 10px 10px 10px; text-align: left; position: relative; }
+  .item.active { border-color: var(--accent); background: var(--active-bg); }
+  .item-head { display: flex; align-items: center; gap: 6px; line-height: 1.2; }
+  .item-name { font-weight: 800; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-meta { margin-top: 5px; font-size: 11px; color: var(--muted); }
+  .sp { flex: 1; }
+  .dot { color: var(--accent-dark); font-size: 10px; }
+  .chip { display: inline-flex; align-items: center; gap: 3px; border-radius: 999px; padding: 2px 6px; font-size: 10px; font-weight: 800; line-height: 1; }
+  .chip svg { width: 12px; height: 12px; display: block; }
+  .chip.claude { background: var(--chip-claude-bg); color: var(--chip-claude-ink); }
+  .chip.codex { background: var(--chip-codex-bg); color: var(--chip-codex-ink); }
+  .chip.ask { background: var(--chip-ask-bg); color: var(--chip-ask-ink); }
+  .chip.idle { opacity: 0.6; }
+  .badge { border-radius: 999px; background: var(--badge-bg); color: var(--badge-ink); padding: 3px 7px; font-size: 10px; font-weight: 800; }
+  .badge.green { background: var(--badge-green-bg); color: var(--accent-dark); }
+  .annot { width: calc(100% - 14px); margin: -2px 0 8px 14px; padding: 5px 8px; border: 1px dashed var(--line); border-radius: 7px; color: var(--muted); font-size: 12px; opacity: 0.6; text-align: left; }
+
+  /* dense (after) row */
+  .wrow { display: flex; align-items: center; gap: 7px; width: calc(100% - 8px); margin-left: 8px; min-height: 34px; padding: 5px 8px 5px 8px; border: 1px solid transparent; border-left: 2px solid var(--line); border-radius: 6px; background: transparent; position: relative; }
+  .wrow:hover { background: var(--surface-soft); border-color: var(--line); }
+  .wrow.active { background: var(--active-bg); border-color: var(--accent); border-left-color: var(--accent); }
+  .wrow.kb { outline: 1.5px solid var(--accent); outline-offset: -1px; }
+  .wrow .idx { font-family: var(--font-mono); font-size: 11px; color: var(--muted); min-width: 16px; text-align: right; font-variant-numeric: tabular-nums; }
+  .wrow .name { font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .wrow .name .dim { font-weight: 500; color: var(--muted); }
+  .wrow.unread .name { color: var(--accent-dark); }
+  .wrow .cmd { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .wrow .sess { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; font-family: var(--font-mono); }
+  .wrow .pencil { width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: 5px; color: var(--muted); opacity: 0.35; }
+  .wrow:hover .pencil { opacity: 1; }
+  .wrow .pencil svg { width: 12px; height: 12px; }
+  .wrow.with-note { flex-wrap: wrap; row-gap: 2px; }
+  .wrow .note { flex-basis: 100%; display: flex; gap: 5px; align-items: center; font-size: 11.5px; color: var(--muted); padding-left: 23px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wrow .note svg { width: 11px; height: 11px; flex: 0 0 auto; }
+  .wrow .note-edit { flex-basis: 100%; margin-left: 23px; display: flex; align-items: center; gap: 6px; }
+  .wrow .note-edit input { flex: 1; font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--accent); border-radius: 5px; background: var(--code-bg); color: var(--code-ink); }
+  .wrow .note-edit .k { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+
+  /* app shell (desktop) */
+  .shell { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; gap: 8px; height: 100%; padding: 8px; }
+  .shell.collapsed { grid-template-columns: 40px minmax(0, 1fr); }
+  .sidebar { grid-row: 1 / span 3; width: 300px; display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 10px; min-height: 0; }
+  .sidebar .list { padding: 0; }
+  .sidebar > .field { flex: 0 0 auto; }
+  .sidebar-head { display: flex; align-items: center; gap: 6px; }
+  .sidebar-head .field.select { flex: 1; }
+  .sidebar-foot { display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: auto; }
+  .sidebar-foot .sp { flex: 1; }
+  .rail40 { grid-row: 1 / span 3; width: 40px; display: flex; flex-direction: column; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 8px 0; }
+  .rail40 .cnt { background: var(--chip-ask-bg); color: var(--chip-ask-ink); font-size: 10px; font-weight: 800; border-radius: 999px; padding: 2px 6px; }
+  .rail40 .khint { writing-mode: vertical-rl; font-family: var(--font-mono); font-size: 10px; color: var(--muted); margin-top: auto; }
+  .topbar { display: flex; gap: 8px; align-items: stretch; min-width: 0; }
+  .pill { flex: 1; display: flex; align-items: center; min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 0 10px; font-size: 13px; font-weight: 700; box-shadow: var(--shadow); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pill .dimp { font-weight: 500; color: var(--muted); }
+  .needs { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--chip-ask-ink); color: var(--chip-ask-ink); border-radius: 999px; padding: 0 10px; font-size: 11px; font-weight: 800; }
+  .toolbar { display: flex; gap: 8px; align-items: center; padding: 0 2px 6px; font-size: 11px; color: var(--muted); }
+  .toolbar .sel { border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; background: var(--surface); color: var(--ink); font-size: 11px; }
+  .snap { grid-column: 2; display: flex; flex-direction: column; min-height: 0; }
+  .term { flex: 1; border: 1px solid var(--line); border-radius: 8px; background: var(--term-bg); color: var(--term-ink); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.45; padding: 10px 12px; overflow: hidden; white-space: pre; margin: 0; }
+  .term .p { color: var(--accent); } .term .g { color: var(--ok); } .term .m { color: var(--muted); }
+  .composer { grid-column: 2; display: flex; flex-direction: column; gap: 6px; }
+  .snips { display: flex; gap: 6px; align-items: center; }
+  .snip { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 11px; background: var(--surface); }
+  .inputbox { border: 1px solid var(--line); border-radius: 10px; background: var(--code-bg); padding: 10px 12px; min-height: 64px; display: flex; flex-direction: column; justify-content: space-between; }
+  .inputbox .ph { font-size: 13px; color: var(--muted); }
+  .inputbox .acts { display: flex; gap: 6px; align-items: center; }
+  .inputbox .acts .sp { flex: 1; }
+  .send { background: var(--accent); color: #fff; border-radius: 7px; padding: 5px 12px; font-size: 12px; font-weight: 700; }
+  .cc-grid { display: grid; gap: 6px; }
+  .cc-line { display: grid; grid-template-columns: 22px 1fr 90px 70px 1fr; gap: 10px; align-items: center; font-size: 12px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+  .cc-line .last { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .menu { display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 6px; width: 220px; font-size: 12.5px; }
+  .menu .mi { padding: 5px 8px; border-radius: 5px; }
+  .menu .mh { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 6px 8px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
+  .menu .mh:first-child { border-top: 0; margin-top: 0; }
+  .menu .mi.moved { color: var(--muted); text-decoration: line-through; }
+  .mini { width: 420px; border: 1px solid var(--doc-line); border-radius: 10px; overflow: hidden; padding: 10px; display: grid; gap: 8px; }
+  .strike { text-decoration: line-through; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 24px; }
+  .card { display: grid; gap: 12px; border-top: 2px solid var(--doc-line); padding-top: 14px; }
+  .card h3 { display: flex; align-items: center; gap: 10px; }
+  @media (max-width: 900px) { .page { grid-template-columns: 1fr; } .rail { position: static; flex-direction: row; flex-wrap: wrap; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-claude" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2l1.5 6L18 4.8l-2.3 4.4 6.3-.7-5.7 2.7 5.7 2.7-6.3-.7L18 19.2 13.5 16 12 22l-1.5-6L6 19.2l2.3-4.4-6.3.7L7.7 12 2 9.3l6.3.7L6 4.8 10.5 8 12 2z"/></symbol>
+  <symbol id="i-codex" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" d="M12 5.2a3.4 3.4 0 0 1 5.9 1.9 3.4 3.4 0 0 1 0 5.8 3.4 3.4 0 0 1-5.9 5.9 3.4 3.4 0 0 1-5.9-1.9 3.4 3.4 0 0 1 0-5.8A3.4 3.4 0 0 1 12 5.2z"/><path fill="none" stroke="currentColor" stroke-width="1.8" d="M12 8.4v7.2M8.9 10.2l6.2 3.6M15.1 10.2l-6.2 3.6"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path fill="none" stroke="currentColor" stroke-width="2" d="M14 3v6h6M8 13h8M8 17h5"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-fold" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></symbol>
+  <symbol id="i-unfold" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M13 17l5-5-5-5M6 17l5-5-5-5"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path fill="none" stroke="currentColor" stroke-width="2" d="M3 3v5h5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="19" r="1.6" fill="currentColor"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8M12 7v5l4 2"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></symbol>
+  <symbol id="i-speaker" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7"/></symbol>
+  <symbol id="i-full" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
+</svg>
+
+<div class="page">
+  <nav class="rail" aria-label="Sections">
+    <div class="eyebrow">Review copy · 2026-09-01</div>
+    <a href="#switcher">1 · Switcher before / after</a>
+    <a href="#row">2 · Row anatomy</a>
+    <a href="#desktop">3 · Desktop sidebar</a>
+    <a href="#collapsed">4 · Collapsed rail</a>
+    <a href="#other">5 · Other pages</a>
+    <a href="#unchanged">6 · What stays the same</a>
+    <a href="#decide">7 · Decisions to make</a>
+  </nav>
+
+  <div class="main">
+    <header class="intro">
+      <div class="meta"><span>impo · /app window switcher</span><span>client-only, no protocol change</span><span>frames use public/styles.css tokens</span></div>
+      <h1>Switch windows in one screen, on a phone and on a desk</h1>
+      <p>The switcher spends about 95 px per window: a two-line card plus an always-present "add note" row. Eleven windows in one repo take three phone screens. This mock keeps every fact the row carries today, drops the ones that never change a decision, and gives desktop a foldable panel instead of a phone-width modal. Callout numbers on each frame map to the list beside it. Proposals are tagged <span class="tag proposed">proposed</span> when they are in scope for this pass and <span class="tag later">later</span> when they are only sketched.</p>
+    </header>
+
+    <!-- ================= 1. before / after ================= -->
+    <section id="switcher">
+      <div class="sec-head">
+        <div class="eyebrow">1 · Switcher, phone 390 px</div>
+        <h2>Before and after, same eleven windows</h2>
+        <p>Left is the current sheet reproduced from the screenshot. Right is the dense list. Both frames are the same height.</p>
+      </div>
+      <div class="frames">
+        <div class="frame-wrap">
+          <div class="frame-label"><strong>Before</strong> current build · 3 of 11 windows visible</div>
+          <div class="ui phone">
+            <div class="sheet-head"><h2>Switch Target</h2><span class="icon-btn">X</span></div>
+            <div class="row-ctl"><span class="small-btn">Refresh</span></div>
+            <div class="row-ctl" style="margin-top:8px"><span style="font-size:11px;color:var(--muted)">New</span><span class="field">new session name</span><span class="small-btn">New</span></div>
+            <div class="list" style="margin-top:6px">
+              <div class="g-repo"><span>kernel</span><span class="cnt">11 wins</span></div>
+              <div class="g-dir"><b>deploy-test</b><span>⎇ feat/deploy-test</span><span>↳ wt</span></div>
+              <div class="item active"><div class="item-head"><span class="item-name">12: kernel/deploy-test:0</span><span class="sp"></span><span class="dot">●</span></div><div class="item-meta">⧉ 0  ·  node</div></div>
+              <div class="annot">+ add note</div>
+              <div class="g-dir"><b>better-deploy</b><span>⎇ fix/better-deploy</span><span>↳ wt</span></div>
+              <div class="item"><div class="item-head"><span class="item-name">2: !kernel/better-deploy:0</span><span class="sp"></span><span class="chip claude idle"><svg><use href="#i-claude"/></svg>✓</span></div><div class="item-meta">⧉ 0  ·  claude</div></div>
+              <div class="annot">+ add note</div>
+              <div class="g-dir"><b>swarm2-replay</b><span>⎇ swarm/deploy2-replay</span><span>↳ wt</span></div>
+              <div class="item"><div class="item-head"><span class="item-name">5: !kernel/swarm2-replay:0</span><span class="sp"></span><span class="chip claude idle"><svg><use href="#i-claude"/></svg>✓</span></div><div class="item-meta">⧉ 0  ·  claude</div></div>
+              <div class="annot">+ add note</div>
+              <div class="g-dir"><b>ci-fix</b><span>⎇ fix/ci-timebomb</span><span>↳ wt</span></div>
+              <div class="item"><div class="item-head"><span class="item-name">7: kernel/ci-fix:0</span><span class="sp"></span><span class="chip ask"><svg><use href="#i-claude"/></svg>❓</span></div><div class="item-meta">⧉ 0  ·  claude</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="frame-wrap">
+          <div class="frame-label"><strong>After</strong> dense list · all 11 + 3 more visible <span class="measure">≈95 px → ≈34 px per window</span></div>
+          <span class="pin" style="left:-11px;top:82px">1</span>
+          <span class="pin" style="left:-11px;top:130px">2</span>
+          <span class="pin" style="left:-11px;top:244px">3</span>
+          <span class="pin" style="left:-11px;top:402px">4</span>
+          <span class="pin" style="left:-11px;top:482px">5</span>
+          <div class="ui phone">
+            <div class="sheet-head"><h2>Windows</h2><span style="display:flex;gap:6px"><span class="icon-btn"><svg><use href="#i-refresh"/></svg></span><span class="icon-btn"><svg><use href="#i-plus"/></svg></span><span class="icon-btn">X</span></span></div>
+            <div class="row-ctl"><span class="field select" style="flex:0 0 120px;color:var(--ink)">MSB-SRP</span><span class="field"><svg width="13" height="13"><use href="#i-search"/></svg>Filter windows<span class="k">⌘K</span></span></div>
+            <div class="list dense" style="margin-top:8px">
+              <div class="g-attn"><span>Needs you</span><span style="font-weight:600;letter-spacing:0;text-transform:none">2</span></div>
+              <div class="wrow"><span class="idx">7</span><span class="name"><span class="dim">kernel/</span>ci-fix:0</span><span class="sp"></span><span class="cmd">claude</span><span class="chip ask"><svg><use href="#i-claude"/></svg>❓</span></div>
+              <div class="wrow unread"><span class="idx">8</span><span class="name"><span class="dim">kernel/</span>gw-port:0</span><span class="sp"></span><span class="cmd">codex</span><span class="dot">●</span><span class="chip codex"><svg><use href="#i-codex"/></svg>✓</span></div>
+
+              <div class="g-repo"><span>kernel</span><span class="cnt">11</span></div>
+              <div class="g-dir"><b>deploy-test</b><span>⎇ feat/deploy-test</span><span>↳ wt</span></div>
+              <div class="wrow active"><span class="idx">12</span><span class="name"><span class="dim">kernel/deploy-test</span>:0</span><span class="sp"></span><span class="cmd">node</span><span class="pencil"><svg><use href="#i-pencil"/></svg></span></div>
+              <div class="g-dir"><b>better-deploy</b><span>⎇ fix/better-deploy</span><span>↳ wt</span></div>
+              <div class="wrow"><span class="idx">2</span><span class="name">!<span class="dim">kernel/better-deploy</span>:0</span><span class="sp"></span><span class="cmd">claude</span><span class="chip claude idle"><svg><use href="#i-claude"/></svg>✓</span></div>
+              <div class="g-dir"><b>swarm2-replay</b><span>⎇ swarm/deploy2-replay</span><span>↳ wt</span></div>
+              <div class="wrow"><span class="idx">5</span><span class="name">!<span class="dim">kernel/swarm2-replay</span>:0</span><span class="sp"></span><span class="cmd">claude</span><span class="chip claude idle"><svg><use href="#i-claude"/></svg>✓</span></div>
+              <div class="g-dir"><b>ci-fix</b><span>⎇ fix/ci-timebomb</span><span>↳ wt</span></div>
+              <div class="wrow with-note"><span class="idx">7</span><span class="name"><span class="dim">kernel/</span>ci-fix:0</span><span class="sp"></span><span class="cmd">claude</span><span class="chip ask"><svg><use href="#i-claude"/></svg>❓</span><span class="note"><svg><use href="#i-note"/></svg>waiting on CI #4567, then rebase</span></div>
+              <div class="g-dir"><b>gw-port</b><span>⎇ feat/go-gateway</span><span>↳ wt</span></div>
+              <div class="wrow unread"><span class="idx">8</span><span class="name"><span class="dim">kernel/</span>gw-port:0</span><span class="sp"></span><span class="cmd">codex</span><span class="dot">●</span><span class="chip codex"><svg><use href="#i-codex"/></svg>✓</span></div>
+              <div class="wrow"><span class="idx">9</span><span class="name"><span class="dim">kernel/</span>gw-port:1</span><span class="sp"></span><span class="cmd">zsh</span></div>
+              <div class="g-dir"><b>kernel</b><span>⎇ main</span></div>
+              <div class="wrow"><span class="idx">0</span><span class="name">claude</span><span class="sess">s:0</span><span class="sp"></span><span class="cmd">claude</span><span class="chip claude"><svg><use href="#i-claude"/></svg>●</span></div>
+              <div class="wrow"><span class="idx">1</span><span class="name">shell</span><span class="sess">s:0</span><span class="sp"></span><span class="cmd">zsh</span></div>
+              <div class="wrow"><span class="idx">3</span><span class="name">tests</span><span class="sess">s:1</span><span class="sp"></span><span class="cmd">node</span><span class="badge green">live</span></div>
+              <div class="wrow"><span class="idx">10</span><span class="name">docs</span><span class="sess">s:1</span><span class="sp"></span><span class="cmd">vim</span></div>
+              <div class="g-repo"><span>impo</span><span class="cnt">2</span></div>
+              <div class="g-dir"><b>tmux-mobile-agent</b><span>⎇ agent-main</span></div>
+              <div class="wrow"><span class="idx">4</span><span class="name">claude</span><span class="sp"></span><span class="cmd">claude</span><span class="chip claude"><svg><use href="#i-claude"/></svg>●</span></div>
+              <div class="wrow"><span class="idx">6</span><span class="name">server</span><span class="sp"></span><span class="cmd">node</span><span class="badge green">live</span></div>
+              <div class="g-repo none"><span>No repo</span><span class="cnt">1</span></div>
+              <div class="g-dir"><b>~/tmp</b></div>
+              <div class="wrow"><span class="idx">11</span><span class="name">scratch</span><span class="sp"></span><span class="cmd">zsh</span></div>
+            </div>
+          </div>
+        </div>
+
+        <ol class="notes" style="align-self:center">
+          <li><strong>Header carries the controls.</strong> Refresh and New session become icons in the title row; the machine select and a filter share one line. Three rows of chrome become two.</li>
+          <li><strong>"Needs you" pinned on top.</strong> Only when non-empty: windows whose agent is asking a question, then unread ones. Same data as the topbar pill, so the fastest switch is always the first tap.</li>
+          <li><strong>One line per window.</strong> Index in mono, name with the part that repeats the directory dimmed, running command muted at the right, agent chip and live badge unchanged. Notes render only when set, on a second muted line.</li>
+          <li><strong>Session chip only when it disambiguates.</strong> <code>s:0</code> / <code>s:1</code> appear in the main-checkout group because those four windows span two tmux sessions. Everywhere else the chip is dropped.</li>
+          <li><strong>Edit a note from the row.</strong> A pencil appears on hover or focus (always faint on touch); tapping it swaps in an inline input. No separate "add note" row, no browser prompt dialog.</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ================= 2. row anatomy ================= -->
+    <section id="row">
+      <div class="sec-head">
+        <div class="eyebrow">2 · Row anatomy</div>
+        <h2>The dense row and its states</h2>
+        <p>Every state the current row can show has a place on the single line. Hit target stays at 34 px, above the 32 px touch minimum.</p>
+      </div>
+      <div class="frames">
+        <div class="ui" style="width:520px;padding:12px;border:1px solid var(--doc-line);border-radius:10px;display:grid;gap:10px">
+          <div class="frame-label" style="font-family:var(--font-doc)">Rest</div>
+          <div class="wrow"><span class="idx">12</span><span class="name"><span class="dim">kernel/deploy-test</span>:0</span><span class="sp"></span><span class="cmd">node</span><span class="pencil"><svg><use href="#i-pencil"/></svg></span></div>
+          <div class="frame-label" style="font-family:var(--font-doc)">Active (current window)</div>
+          <div class="wrow active"><span class="idx">12</span><span class="name"><span class="dim">kernel/deploy-test</span>:0</span><span class="sp"></span><span class="cmd">node</span><span class="pencil"><svg><use href="#i-pencil"/></svg></span></div>
+          <div class="frame-label" style="font-family:var(--font-doc)">Unread + agent finished</div>
+          <div class="wrow unread"><span class="idx">8</span><span class="name"><span class="dim">kernel/</span>gw-port:0</span><span class="sp"></span><span class="cmd">codex</span><span class="dot">●</span><span class="chip codex"><svg><use href="#i-codex"/></svg>✓</span></div>
+          <div class="frame-label" style="font-family:var(--font-doc)">Asking a question + note set</div>
+          <div class="wrow with-note"><span class="idx">7</span><span class="name"><span class="dim">kernel/</span>ci-fix:0</span><span class="sp"></span><span class="cmd">claude</span><span class="chip ask"><svg><use href="#i-claude"/></svg>❓</span><span class="note"><svg><use href="#i-note"/></svg>waiting on CI #4567, then rebase</span></div>
+          <div class="frame-label" style="font-family:var(--font-doc)">Editing the note inline (Enter saves, Esc cancels)</div>
+          <div class="wrow with-note active"><span class="idx">7</span><span class="name"><span class="dim">kernel/</span>ci-fix:0</span><span class="sp"></span><span class="cmd">claude</span><span class="chip ask"><svg><use href="#i-claude"/></svg>❓</span><span class="note-edit"><input value="waiting on CI #4567, then rebase"><span class="k">↵ save · esc</span></span></div>
+          <div class="frame-label" style="font-family:var(--font-doc)">Keyboard cursor while filtering (↑↓ then Enter)</div>
+          <div class="wrow kb"><span class="idx">3</span><span class="name">tests</span><span class="sess">s:1</span><span class="sp"></span><span class="cmd">node</span><span class="badge green">live</span></div>
+          <div class="frame-label" style="font-family:var(--font-doc)">Long name truncates, index and chips never do</div>
+          <div class="wrow" style="width:340px"><span class="idx">14</span><span class="name"><span class="dim">kernel/</span>swarm2-deploy-replay-with-a-long-name:0</span><span class="sp"></span><span class="cmd">claude</span><span class="chip claude"><svg><use href="#i-claude"/></svg>●</span></div>
+        </div>
+        <table class="spec" style="align-self:center;max-width:560px">
+          <tr><th>Slot</th><th>Source today</th><th>Rule</th></tr>
+          <tr><td>Index</td><td><code>win.index</code></td><td>Mono, tabular, right-aligned so the column scans.</td></tr>
+          <tr><td>Name</td><td><code>win.name</code></td><td>Prefix equal to <code>repo/dir</code> or <code>dir</code> is dimmed, not removed. Full name stays in the tooltip and the topbar.</td></tr>
+          <tr><td>Session</td><td>tmux session name</td><td>Shown as <code>s:N</code> only if the directory's windows span more than one session.</td></tr>
+          <tr><td>Command</td><td><code>pane_current_command</code></td><td>Muted, right side. Hidden when it equals the agent chip's type (e.g. <code>claude</code> chip already says it).</td></tr>
+          <tr><td>Unread / agent / live</td><td>existing dot, chip, badge</td><td>Unchanged glyphs and colors. Order: unread dot, agent chip, live badge.</td></tr>
+          <tr><td>Note</td><td><code>@tm_annotation</code></td><td>Second line only when set. Pencil opens inline edit; long-press or right-click also works.</td></tr>
+          <tr><td>Group headers</td><td>repo, dir, branch, worktree</td><td>Kept. Margins tightened, count loses the word "wins".</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= 3. desktop ================= -->
+    <section id="desktop">
+      <div class="sec-head">
+        <div class="eyebrow">3 · Desktop, 1280 px and wider</div>
+        <h2>The switcher becomes a left panel</h2>
+        <p>At 900 px and wider the same list renders as a 300 px column beside the terminal. It stays open across window switches, folds to a rail, and remembers its state per browser.</p>
+      </div>
+      <div class="wide">
+        <div class="ui desktop">
+          <span class="pin" style="left:296px;top:14px">1</span>
+          <span class="pin" style="left:296px;top:56px">2</span>
+          <span class="pin" style="left:296px;top:98px">3</span>
+          <span class="pin" style="left:296px;top:672px">4</span>
+          <span class="pin" style="left:560px;top:8px">5</span>
+          <span class="pin" style="left:1080px;top:8px">6</span>
+          <div class="shell">
+            <aside class="sidebar">
+              <div class="sidebar-head"><span class="field select" style="color:var(--ink)">MSB-SRP</span><span class="icon-btn" title="Refresh"><svg><use href="#i-refresh"/></svg></span><span class="icon-btn" title="New session"><svg><use href="#i-plus"/></svg></span><span class="icon-btn" title="Collapse (⌘B)"><svg><use href="#i-fold"/></svg></span></div>
+              <span class="field"><svg width="13" height="13"><use href="#i-search"/></svg>Filter windows<span class="k">⌘K</span></span>
+              <div class="list dense">
+                <div class="g-attn"><span>Needs you</span><span style="font-weight:600;letter-spacing:0;text-transform:none">2</span></div>
+                <div class="wrow"><span class="idx">7</span><span class="name"><span class="dim">kernel/</span>ci-fix:0</span><span class="sp"></span><span class="chip ask"><svg><use href="#i-claude"/></svg>❓</span></div>
+                <div class="wrow unread"><span class="idx">8</span><span class="name"><span class="dim">kernel/</span>gw-port:0</span><span class="sp"></span><span class="dot">●</span><span class="chip codex"><svg><use href="#i-codex"/></svg>✓</span></div>
+                <div class="g-repo"><span>kernel</span><span class="cnt">11</span></div>
+                <div class="g-dir"><b>deploy-test</b><span>⎇ feat/deploy-test</span><span>↳ wt</span></div>
+                <div class="wrow active"><span class="idx">12</span><span class="name"><span class="dim">kernel/deploy-test</span>:0</span><span class="sp"></span><span class="cmd">node</span><span class="pencil"><svg><use href="#i-pencil"/></svg></span></div>
+                <div class="g-dir"><b>better-deploy</b><span>⎇ fix/better-deploy</span><span>↳ wt</span></div>
+                <div class="wrow"><span class="idx">2</span><span class="name">!<span class="dim">kernel/better-deploy</span>:0</span><span class="sp"></span><span class="chip claude idle"><svg><use href="#i-claude"/></svg>✓</span></div>
+                <div class="g-dir"><b>swarm2-replay</b><span>⎇ swarm/deploy2-replay</span><span>↳ wt</span></div>
+                <div class="wrow"><span class="idx">5</span><span class="name">!<span class="dim">kernel/swarm2-replay</span>:0</span><span class="sp"></span><span class="chip claude idle"><svg><use href="#i-claude"/></svg>✓</span></div>
+                <div class="g-dir"><b>ci-fix</b><span>⎇ fix/ci-timebomb</span><span>↳ wt</span></div>
+                <div class="wrow with-note"><span class="idx">7</span><span class="name"><span class="dim">kernel/</span>ci-fix:0</span><span class="sp"></span><span class="chip ask"><svg><use href="#i-claude"/></svg>❓</span><span class="note"><svg><use href="#i-note"/></svg>waiting on CI #4567, then rebase</span></div>
+                <div class="g-dir"><b>gw-port</b><span>⎇ feat/go-gateway</span><span>↳ wt</span></div>
+                <div class="wrow unread"><span class="idx">8</span><span class="name"><span class="dim">kernel/</span>gw-port:0</span><span class="sp"></span><span class="dot">●</span><span class="chip codex"><svg><use href="#i-codex"/></svg>✓</span></div>
+                <div class="wrow"><span class="idx">9</span><span class="name"><span class="dim">kernel/</span>gw-port:1</span><span class="sp"></span><span class="cmd">zsh</span></div>
+                <div class="g-dir"><b>kernel</b><span>⎇ main</span></div>
+                <div class="wrow"><span class="idx">0</span><span class="name">claude</span><span class="sess">s:0</span><span class="sp"></span><span class="chip claude"><svg><use href="#i-claude"/></svg>●</span></div>
+                <div class="wrow"><span class="idx">1</span><span class="name">shell</span><span class="sess">s:0</span><span class="sp"></span><span class="cmd">zsh</span></div>
+                <div class="wrow"><span class="idx">3</span><span class="name">tests</span><span class="sess">s:1</span><span class="sp"></span><span class="cmd">node</span><span class="badge green">live</span></div>
+                <div class="wrow"><span class="idx">10</span><span class="name">docs</span><span class="sess">s:1</span><span class="sp"></span><span class="cmd">vim</span></div>
+                <div class="g-repo"><span>impo</span><span class="cnt">2</span></div>
+                <div class="g-dir"><b>tmux-mobile-agent</b><span>⎇ agent-main</span></div>
+                <div class="wrow"><span class="idx">4</span><span class="name">claude</span><span class="sp"></span><span class="chip claude"><svg><use href="#i-claude"/></svg>●</span></div>
+                <div class="wrow"><span class="idx">6</span><span class="name">server</span><span class="sp"></span><span class="cmd">node</span><span class="badge green">live</span></div>
+              </div>
+              <div class="sidebar-foot"><span class="small-btn">New window</span><span class="small-btn">Duplicate</span><span class="small-btn">Transcript</span><span class="sp"></span><span class="mono" style="font-size:10px;color:var(--muted)">⌥↑↓ prev/next</span></div>
+            </aside>
+
+            <div class="topbar">
+              <span class="pill">12: kernel/deploy-test:0 <span class="dimp">&nbsp;· ~/wt/kernel/deploy-test ⎇ feat/deploy-test</span></span>
+              <span class="icon-btn" title="Recent"><svg><use href="#i-clock"/></svg></span>
+              <span class="needs">2 need you</span>
+              <span class="icon-btn" title="Fleet"><svg><use href="#i-grid"/></svg></span>
+              <span class="icon-btn" title="Read aloud"><svg><use href="#i-speaker"/></svg></span>
+              <span class="toolbar" style="padding:0;margin-left:4px"><span class="sel">500 lines ⌄</span><span class="sel" style="border-style:dashed;color:var(--muted)">+ note</span><span class="sel">Auto ✓</span><span class="icon-btn" title="Fullscreen"><svg><use href="#i-full"/></svg></span></span>
+              <span class="icon-btn" title="More"><svg><use href="#i-more"/></svg></span>
+            </div>
+
+            <div class="snap"><pre class="term"><span class="m">$ node scripts/deploy-test.mjs --env staging</span>
+<span class="g">✓</span> controller health  https://eng.impo.ai/api/health  200  (412 ms)
+<span class="g">✓</span> connector-update dispatched  machine=MSB-SRP  session=tmux-mobile-update-4f2a
+<span class="m">…</span> polling command-center  stale=true  connectorVersion=14  expected=15
+<span class="m">…</span> polling command-center  stale=true  connectorVersion=14  expected=15
+<span class="g">✓</span> reconnected  stale=false  connectorVersion=15  agentRevision=8cc0ad5
+<span class="p">→</span> next: MSB-LAB (stale=true)  press y to continue, n to stop
+<span class="m">$</span> ▍</pre></div>
+
+            <div class="composer">
+              <div class="snips"><span class="snip">y</span><span class="snip">n</span><span class="snip">run tests</span><span class="snip">show diff</span><span class="icon-btn" style="margin-left:auto">≡</span></div>
+              <div class="inputbox"><span class="ph">Message, dictate, or tap a snippet…</span><div class="acts"><span class="icon-btn">⌗</span><span class="snip">plan · high</span><span class="sp"></span><span class="small-btn">Keys</span><span class="icon-btn">🎙</span><span class="send">Send</span></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <ol class="notes">
+        <li><strong>Sidebar header.</strong> Machine select, refresh, new session, and the fold button on one row. The "Switch Target" title is gone; the column is self-evident.</li>
+        <li><strong>Filter with ⌘K.</strong> Type to prune the tree by repo, directory, branch, name, index, session, or note. ↑↓ moves a cursor, Enter switches. Escape clears, then blurs.</li>
+        <li><strong>Same tree as the phone.</strong> One render path, one stylesheet; the desktop column only changes width, position, and the fact that picking a window no longer closes the list.</li>
+        <li><strong>Footer.</strong> The three most-used window actions from the More menu, plus the prev/next shortcut hint. <span class="tag proposed">proposed</span>, drop if the menu should stay the single home for actions.</li>
+        <li><strong>Toolbar folds into the topbar.</strong> On desktop the Lines, note, Auto, and Fullscreen controls sit right of the title, so the terminal gains a full row. Phone keeps the toolbar row for now. <span class="tag proposed">proposed</span></li>
+        <li><strong>Fleet button.</strong> One icon to reach Command Center instead of the last item of the More menu. Command Center already links back per card. <span class="tag proposed">proposed</span></li>
+      </ol>
+    </section>
+
+    <!-- ================= 4. collapsed ================= -->
+    <section id="collapsed">
+      <div class="sec-head">
+        <div class="eyebrow">4 · Collapsed rail</div>
+        <h2>Folded, the panel is a 40 px rail</h2>
+        <p>⌘B or the fold button. The rail keeps the two things worth a glance: how many windows need you, and the way back in. Fullscreen hides the rail entirely.</p>
+      </div>
+      <div class="wide">
+        <div class="ui desktop short">
+          <span class="pin" style="left:36px;top:14px">1</span>
+          <span class="pin" style="left:36px;top:70px">2</span>
+          <div class="shell collapsed">
+            <aside class="rail40"><span class="icon-btn" title="Expand (⌘B)"><svg><use href="#i-unfold"/></svg></span><span class="cnt">2</span><span class="khint">⌘K to jump</span></aside>
+            <div class="topbar">
+              <span class="pill">12: kernel/deploy-test:0 <span class="dimp">&nbsp;· ~/wt/kernel/deploy-test ⎇ feat/deploy-test</span></span>
+              <span class="icon-btn"><svg><use href="#i-clock"/></svg></span><span class="needs">2 need you</span><span class="icon-btn"><svg><use href="#i-grid"/></svg></span><span class="icon-btn"><svg><use href="#i-speaker"/></svg></span>
+              <span class="toolbar" style="padding:0;margin-left:4px"><span class="sel">500 lines ⌄</span><span class="sel" style="border-style:dashed;color:var(--muted)">+ note</span><span class="sel">Auto ✓</span><span class="icon-btn"><svg><use href="#i-full"/></svg></span></span>
+              <span class="icon-btn"><svg><use href="#i-more"/></svg></span>
+            </div>
+            <div class="snap"><pre class="term"><span class="g">✓</span> reconnected  stale=false  connectorVersion=15  agentRevision=8cc0ad5
+<span class="p">→</span> next: MSB-LAB (stale=true)  press y to continue, n to stop
+<span class="m">$</span> ▍</pre></div>
+            <div class="composer"><div class="inputbox" style="min-height:52px"><span class="ph">Message, dictate, or tap a snippet…</span><div class="acts"><span class="sp"></span><span class="small-btn">Keys</span><span class="send">Send</span></div></div></div>
+          </div>
+        </div>
+      </div>
+      <ol class="notes">
+        <li><strong>Expand.</strong> Click, ⌘B, or ⌘K (which expands and focuses the filter in one step). State persists in localStorage under the existing <code>tmux-mobile-*</code> prefix.</li>
+        <li><strong>Needs-you count.</strong> Mirrors the topbar pill so a folded rail still says whether anything is waiting. Clicking it expands with the "Needs you" group in view.</li>
+      </ol>
+    </section>
+
+    <!-- ================= 5. other pages ================= -->
+    <section id="other">
+      <div class="sec-head">
+        <div class="eyebrow">5 · Other pages</div>
+        <h2>Smaller wins found while surveying</h2>
+        <p>Each is independent. Tick the ones to take; the rest stay sketches.</p>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <h3>Phone toolbar, one row shorter <span class="tag proposed">proposed</span></h3>
+          <div class="ui mini">
+            <div class="frame-label" style="font-family:var(--font-doc)">Today</div>
+            <div class="toolbar"><span>Lines</span><span class="sel">500 ⌄</span><span class="sel" style="border-style:dashed">+ note</span><span class="sel">Refresh</span><span class="sel">☐ Auto</span><span class="sp"></span><span class="icon-btn"><svg><use href="#i-full"/></svg></span></div>
+            <div class="frame-label" style="font-family:var(--font-doc)">Proposed: merged into the topbar's right side</div>
+            <div class="topbar"><span class="pill" style="font-size:12px">12: kernel/deploy-test:0</span><span class="icon-btn"><svg><use href="#i-clock"/></svg></span><span class="sel" style="border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:11px">500 ⌄</span><span class="icon-btn"><svg><use href="#i-full"/></svg></span><span class="icon-btn"><svg><use href="#i-more"/></svg></span></div>
+          </div>
+          <p>Lines becomes a compact select, Refresh and Auto move into the More menu (auto-refresh is on by default and rarely toggled), the note chip lives on the window row instead. Saves about 36 px above the terminal on every phone screen.</p>
+        </div>
+
+        <div class="card">
+          <h3>More menu, grouped <span class="tag proposed">proposed</span></h3>
+          <div class="ui mini" style="display:flex;gap:14px;align-items:flex-start">
+            <div class="menu"><div class="mh">Window</div><div class="mi">Answer question</div><div class="mi">Rename</div><div class="mi moved">New window</div><div class="mi moved">Duplicate</div><div class="mi">New branch</div><div class="mi">Fork agent</div><div class="mi">Close window</div><div class="mh">Navigate</div><div class="mi">Directories</div><div class="mi">Pinned artifacts</div><div class="mi moved">Transcript</div><div class="mi">Command Center</div><div class="mh">Settings</div><div class="mi">Theme · Font · Voice · Sound</div><div class="mi">Report a problem</div><div class="mh">Account</div><div class="mi">Logout</div></div>
+            <p style="font-size:13px;color:var(--muted);font-family:var(--font-doc)">21 flat items today. Four labelled groups, and the struck items move to the desktop sidebar footer (they stay in the phone menu). Copy window id and Refresh fold under Window and Navigate.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Command Center, compact list density <span class="tag later">later</span></h3>
+          <div class="ui mini">
+            <div class="cc-grid">
+              <div class="cc-line"><span class="chip ask"><svg><use href="#i-claude"/></svg></span><b>7: kernel/ci-fix:0</b><span class="mono" style="font-size:11px;color:var(--muted)">MSB-SRP</span><span class="badge">asking</span><span class="last">Should I rebase onto main before pushing?</span></div>
+              <div class="cc-line"><span class="chip claude"><svg><use href="#i-claude"/></svg></span><b>0: claude</b><span class="mono" style="font-size:11px;color:var(--muted)">MSB-SRP</span><span class="badge green">working</span><span class="last">Running the full test suite (2 of 6)…</span></div>
+              <div class="cc-line"><span class="chip codex"><svg><use href="#i-codex"/></svg></span><b>8: kernel/gw-port:0</b><span class="mono" style="font-size:11px;color:var(--muted)">MSB-LAB</span><span class="badge">done</span><span class="last">Added the gateway deploy handler and tests.</span></div>
+            </div>
+          </div>
+          <p>A "List" toggle next to the font A−/A+ control. One line per agent: state, window, machine, last line. Cards remain the default; this is a CSS-variable density mode over the same renderer, so it is cheap but not needed for this pass.</p>
+        </div>
+
+        <div class="card">
+          <h3>Fleet button in the app topbar <span class="tag proposed">proposed</span></h3>
+          <div class="ui mini">
+            <div class="topbar"><span class="pill" style="font-size:12px">12: kernel/deploy-test:0</span><span class="icon-btn"><svg><use href="#i-clock"/></svg></span><span class="icon-btn" style="border-color:var(--accent)"><svg><use href="#i-grid"/></svg></span><span class="icon-btn"><svg><use href="#i-more"/></svg></span></div>
+          </div>
+          <p>Command Center is the fleet inbox and the app is where action happens. The round trip currently needs the last item of a 21-item menu. One icon each way.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 6. unchanged ================= -->
+    <section id="unchanged">
+      <div class="sec-head">
+        <div class="eyebrow">6 · What stays the same</div>
+        <h2>Boundaries of this change</h2>
+      </div>
+      <table class="spec">
+        <tr><th>Area</th><th>Status</th></tr>
+        <tr><td>tmux as source of truth</td><td>Unchanged. Notes still live on the window option <code>@tm_annotation</code>; the tree is built from metadata the connector already sends.</td></tr>
+        <tr><td>Connector and protocol</td><td>No change, no version bump. Everything here is <code>public/app.js</code>, <code>public/styles.css</code>, <code>public/index.html</code>, plus one pure filter helper with a node test.</td></tr>
+        <tr><td>Phone layout</td><td>Bottom sheet stays. It gets the dense rows, the filter, and the "Needs you" group; no bottom tab bar, per the product notes.</td></tr>
+        <tr><td>Grouping</td><td>Repo → directory → windows from the August change stays as is, including the branch chip only when it differs from the directory name.</td></tr>
+        <tr><td>Status vocabulary</td><td>Unread dot, agent chip glyphs (● ✓ ❓ ?), live badge, and their colors are reused, not redrawn.</td></tr>
+        <tr><td>Recents popup and needs-you pill</td><td>Kept in the topbar. On desktop the popup and the sidebar can be open at the same time.</td></tr>
+      </table>
+    </section>
+
+    <!-- ================= 7. decisions ================= -->
+    <section id="decide">
+      <div class="sec-head">
+        <div class="eyebrow">7 · Decisions to make</div>
+        <h2>Reply with the ones to change</h2>
+        <p>Defaults are what the frames show. Anything unticked is built as drawn.</p>
+      </div>
+      <ul class="checklist">
+        <li>Dim the repeated <code>repo/dir</code> prefix in window names (drawn) versus strip it entirely versus leave names untouched.</li>
+        <li>Pin a "Needs you" group at the top of the tree (drawn) versus rely only on the topbar pill.</li>
+        <li>Sidebar footer with New window, Duplicate, Transcript (drawn) versus no footer.</li>
+        <li>Desktop breakpoint at 900 px (drawn) versus wider, for example 1100 px, so tablets in landscape keep the sheet.</li>
+        <li>Fold the phone toolbar into the topbar and move Refresh and Auto to the More menu (section 5) versus leave the phone toolbar alone.</li>
+        <li>Shortcuts: ⌘K filter, ⌘B fold, ⌥↑/↓ prev/next (drawn). Add <code>[</code> and <code>]</code> as single-key prev/next on desktop, or keep everything behind a modifier.</li>
+        <li>Fleet icon in the app topbar (section 5) versus keep it in the More menu only.</li>
+      </ul>
+    </section>
+  </div>
+</div>

@@ -10,6 +10,7 @@ import {
 } from "./snippets.js";
 import { windowKey, windowStableId, windowDescriptor, windowTitleText, windowHoverDetail, mergeRecent, pruneRecent } from "./window-id.js";
 import { fetchJsonWithTimeout } from "./fetch-timeout.js";
+import { filterWindowTree, flattenWindowTree, splitRedundantPrefix } from "./window-filter.js";
 
 const SNAPSHOT_BOTTOM_SLOP_PX = 8;
 const MAX_WAVEFORM_SAMPLES = 40;
@@ -272,6 +273,13 @@ const globalRecentsAtom = createPersistedAtom("tmux-mobile-global-recents", {
   entries: [], // [{ key, machineId, mux, host, sessionName, index, name, cwd, branch, worktree }]
 });
 
+// Desktop sidebar fold state (the window list is a left column at >= 900px).
+const sidebarAtom = createPersistedAtom("tmux-mobile-window-sidebar", { collapsed: false });
+// Windows the user pinned to the top of the switcher (desktop left pane).
+// Keyed by the stable machine+session+index identity (windowRecentKey) so a
+// pin survives tmux window-id churn and reloads; per browser, like recents.
+const pinnedWindowsAtom = createPersistedAtom("tmux-mobile-pinned-windows", { keys: [] });
+
 // Record the just-visited window into the global list (MRU, deduped, capped).
 // Builds the same field bag the descriptor/id helpers consume.
 function recordGlobalRecent(win) {
@@ -395,7 +403,10 @@ const state = {
   networkTrouble: false,
   networkTroubleReason: "",
   chat: [],
-  targetPickerOpen: false,
+  targetPickerOpen: false, // the window list is visible (sheet open / sidebar expanded)
+  windowFilter: "", // switcher type-to-jump query
+  windowFilterCursor: "", // window id under the ↑↓ keyboard cursor while filtering
+  noteEditingId: "", // window id whose note is being edited inline (pauses renderWindows)
   directoryPickerOpen: false,
   actionsOpen: false,
   snapshotFullscreen: false,
@@ -652,6 +663,16 @@ const els = {
   closeTargetPicker: document.querySelector("#closeTargetPicker"),
   targetBackdrop: document.querySelector("#targetBackdrop"),
   targetSheet: document.querySelector("#targetSheet"),
+  targetPanel: document.querySelector("#targetSheet .target-panel"),
+  windowFilterInput: document.querySelector("#windowFilterInput"),
+  windowFilterHint: document.querySelector("#windowFilterHint"),
+  sidebarToggle: document.querySelector("#sidebarToggle"),
+  sidebarToggleCount: document.querySelector("#sidebarToggleCount"),
+  toggleNewSession: document.querySelector("#toggleNewSession"),
+  sessionManagement: document.querySelector("#sessionManagement"),
+  sidebarNewWindow: document.querySelector("#sidebarNewWindow"),
+  sidebarDuplicateWindow: document.querySelector("#sidebarDuplicateWindow"),
+  sidebarTranscript: document.querySelector("#sidebarTranscript"),
   speakWindow: document.querySelector("#speakWindow"),
 };
 
@@ -1211,37 +1232,27 @@ function agentIcon(type) {
   return AGENT_ICONS[type] || escapeHtml(type);
 }
 
-function itemButton({
-  active,
-  title,
-  meta,
-  badge,
-  badgeGreen,
-  onClick,
-  className,
-  metaClassName = "",
-  cwd = "",
-  branch = "",
-  worktree = false,
-  agentType = "",
-  turn = "",
-  unread = false,
-  waitingForInput = false,
-  waitingConfidence = "",
-}) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = `${className || "item"}${active ? " active" : ""}${unread ? " unread" : ""}`;
-  // Small chip showing the AI agent running in the window as a brand ICON
-  // (claude/codex/gemini) to save horizontal space, tinted by turn state:
-  // "working" pulses, "idle" is muted (turn ended). A window blocked on an
-  // AskUserQuestion prompt gets a distinct "❓ ask" state — the strongest
-  // "needs you" signal. The turn glyph trails the icon.
-  //
-  // HONEST STATE (Wave 1): a low-confidence "maybe blocked" (waitingConfidence
-  // low) or an unverified turn renders as a distinct "unverified" chip with a
-  // "?" hedge — never the confident ❓/✓, so the chip can't claim certainty the
-  // detector doesn't have.
+const NOTE_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>';
+const PENCIL_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const PIN_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 3h6l-1 7 3 3H7l3-3z"/></svg>';
+const UNREAD_DOT_HTML =
+  '<span class="unread-dot" title="New since last visit" aria-label="unread">●</span>';
+
+// Small chip showing the AI agent running in the window as a brand ICON
+// (claude/codex/gemini) to save horizontal space, tinted by turn state:
+// "working" pulses, "idle" is muted (turn ended). A window blocked on an
+// AskUserQuestion prompt gets a distinct "❓ ask" state — the strongest
+// "needs you" signal. The turn glyph trails the icon.
+//
+// HONEST STATE (Wave 1): a low-confidence "maybe blocked" (waitingConfidence
+// low) or an unverified turn renders as a distinct "unverified" chip with a
+// "?" hedge — never the confident ❓/✓, so the chip can't claim certainty the
+// detector doesn't have.
+function agentChipHtml({ agentType = "", turn = "", waitingForInput = false, waitingConfidence = "" }) {
+  if (!agentType) return "";
   const lowConfidenceWaiting = waitingForInput && waitingConfidence === "low";
   const confidentWaiting = waitingForInput && !lowConfidenceWaiting;
   const turnState = confidentWaiting
@@ -1259,40 +1270,87 @@ function itemButton({
           ? " ✓"
           : "";
   const chipLabel = turnState === "unverified" ? `${agentType} (unverified)` : agentType;
-  const agentChip = agentType
-    ? `<span class="agent-chip agent-${escapeHtml(agentType)} turn-${escapeHtml(turnState)}" title="${escapeHtml(chipLabel)}" aria-label="${escapeHtml(chipLabel)}">${agentIcon(agentType)}${turnSuffix}</span>`
-    : "";
-  // Unread dot: this window changed since you last visited it. A left-rail dot so
-  // the column scans vertically.
-  const unreadDot = unread ? `<span class="unread-dot" title="New since last visit" aria-label="unread">●</span>` : "";
-  // Compact inline identity metadata (branch + worktree chip + cwd), all on the
-  // header row so it doesn't cost three stacked lines. The ↳wt chip only shows
-  // for a linked git worktree; cwd only when it differs from the branch (the
-  // caller already decides that).
-  const worktreeChip = worktree ? `<span class="item-wt">↳ wt</span>` : "";
-  const branchBit = branch
-    ? `<span class="item-branch" title="${escapeHtml(branch)}${worktree ? " (linked worktree)" : ""}">⎇ ${escapeHtml(branch)}</span>`
-    : "";
-  const cwdBit = cwd
-    ? `<span class="item-cwd" title="${escapeHtml(cwd)}">${escapeHtml(cwd)}</span>`
-    : "";
-  // Identity line: name is the prominent title; branch/wt/cwd are compact meta
-  // after it; agent icon + live badge sit at the right.
-  button.innerHTML = `
-    <div class="item-head">
-      ${unreadDot}
-      <span class="item-name">${escapeHtml(title)}</span>
-      ${branchBit}
-      ${worktreeChip}
-      ${cwdBit}
-      <span class="item-head-spacer"></span>
-      ${agentChip}
-      ${badge ? `<span class="badge ${badgeGreen ? "green" : ""}">${escapeHtml(badge)}</span>` : ""}
-    </div>
-    ${meta ? `<div class="item-meta ${escapeHtml(metaClassName)}">${escapeHtml(meta)}</div>` : ""}
+  return `<span class="agent-chip agent-${escapeHtml(agentType)} turn-${escapeHtml(turnState)}" title="${escapeHtml(chipLabel)}" aria-label="${escapeHtml(chipLabel)}">${agentIcon(agentType)}${turnSuffix}</span>`;
+}
+
+// One switcher row, a single line: [unread dot] index name [session chip]
+// … command [agent chip] [live] [edit note] [pin], plus a second muted line
+// when a note is set. It's a div[role=button] rather than a <button> because
+// the row hosts its own small buttons (nested buttons are invalid HTML).
+//
+// The part of the window name that merely repeats its group headers (e.g.
+// "kernel/deploy-test" under repo kernel / directory deploy-test) is dimmed —
+// kept, so the full name is still readable, but no longer bold twice. The
+// running command is dropped when it just repeats the agent chip.
+function windowRow({ win, meta, ctx, active, unread, live, waitingForInput, pinned, onSelect }) {
+  const agentType = meta.agentType || "";
+  const row = document.createElement("div");
+  row.className = `window-row${active ? " active" : ""}${unread ? " unread" : ""}${(win.annotation || "").trim() ? " with-note" : ""}${
+    state.windowFilterCursor === win.id ? " kb-selected" : ""
+  }`;
+  row.setAttribute("role", "button");
+  row.tabIndex = 0;
+  row.dataset.windowId = win.id;
+  row.title = `${win.index}: ${win.name}${win.cwd ? `\n${abbrevHome(win.cwd)}` : ""}`;
+  const { marker, prefix, rest } = splitRedundantPrefix(win.name, {
+    repo: ctx.repoLabel || "",
+    dir: ctx.dirBasename || "",
+  });
+  const nameHtml = prefix
+    ? `${escapeHtml(marker)}<span class="window-row-dim">${escapeHtml(prefix)}</span>${escapeHtml(rest)}`
+    : escapeHtml(win.name || "");
+  const command = win.activeCommand && win.activeCommand !== agentType ? win.activeCommand : "";
+  const note = (win.annotation || "").trim();
+  const sessionChip = ctx.sessionChip || "";
+  row.innerHTML = `
+    <span class="window-row-main">
+    ${unread ? UNREAD_DOT_HTML : ""}
+    <span class="window-row-idx">${escapeHtml(String(win.index))}</span>
+    <span class="window-row-name">${nameHtml}</span>
+    ${sessionChip ? `<span class="window-row-sess" title="tmux session ${escapeHtml(sessionChip)}">s:${escapeHtml(sessionChip)}</span>` : ""}
+    <span class="window-row-spacer"></span>
+    ${command ? `<span class="window-row-cmd">${escapeHtml(command)}</span>` : ""}
+    ${agentChipHtml({
+      agentType,
+      turn: meta.turn || "",
+      waitingForInput,
+      waitingConfidence: meta.waitingConfidence || "",
+    })}
+    ${live ? `<span class="badge green">live</span>` : ""}
+    <span class="window-row-tools">
+    <button type="button" class="window-row-tool window-row-edit" title="${note ? "Edit note" : "Add a note"}" aria-label="${note ? "Edit note" : "Add a note"} for ${escapeHtml(`${win.index}: ${win.name}`)}">${PENCIL_ICON}</button>
+    <button type="button" class="window-row-tool window-row-pin${pinned ? " is-pinned" : ""}" title="${pinned ? "Unpin" : "Pin to top"}" aria-pressed="${pinned ? "true" : "false"}" aria-label="${pinned ? "Unpin" : "Pin"} ${escapeHtml(`${win.index}: ${win.name}`)}">${PIN_ICON}</button>
+    </span>
+    </span>
+    ${note ? `<span class="window-row-note">${NOTE_ICON}<span class="window-row-note-text">${escapeHtml(note)}</span></span>` : ""}
   `;
-  button.addEventListener("click", onClick);
-  return button;
+  row.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest(".window-row-tool, .window-row-note-edit")) return;
+    onSelect();
+  });
+  row.addEventListener("keydown", (event) => {
+    if (event.target !== row) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect();
+    }
+  });
+  // Right-click (desktop) also opens the note editor; touch has the always-
+  // visible (dimmed) pencil instead.
+  row.addEventListener("contextmenu", (event) => {
+    if (event.target instanceof Element && event.target.closest(".window-row-note-edit")) return;
+    event.preventDefault();
+    startInlineNoteEdit(row, win);
+  });
+  row.querySelector(".window-row-edit").addEventListener("click", (event) => {
+    event.stopPropagation();
+    startInlineNoteEdit(row, win);
+  });
+  row.querySelector(".window-row-pin").addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleWindowPin(win);
+  });
+  return row;
 }
 
 async function copyTextToClipboard(text) {
@@ -1383,54 +1441,103 @@ function windowsForSession(sessionId) {
   return state.windows.filter((win) => win.sessionId === sessionId);
 }
 
-// A per-window annotation row, shown right under a window's button in the list:
-// a free-text follow-up note (e.g. "waiting on CI #4567") useful for tracking a
-// long-running task in that window. Click to edit; stored server-side on the
-// tmux window so it follows the window across devices/restarts.
-function windowAnnotationRow(win) {
-  const row = document.createElement("button");
-  row.type = "button";
-  row.className = "window-annotation";
-  const note = (win.annotation || "").trim();
-  if (note) {
-    row.classList.add("has-note");
-    const icon = document.createElement("span");
-    icon.className = "window-annotation-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.textContent = "📝";
-    const text = document.createElement("span");
-    text.className = "window-annotation-text";
-    text.textContent = note;
-    row.append(icon, text);
-    row.title = "Edit note";
-    row.setAttribute("aria-label", `Window note: ${note}. Tap to edit.`);
-  } else {
-    row.textContent = "+ add note";
-    row.title = "Add a follow-up note";
-    row.setAttribute("aria-label", "Add a window note");
-  }
-  row.addEventListener("click", () => editWindowAnnotation(win));
-  return row;
+// ---- Window notes ------------------------------------------------------
+// A free-text follow-up note per window (e.g. "waiting on CI #4567"), stored
+// server-side on the tmux window (@tm_annotation) so it follows the window
+// across devices/restarts. Shown as a second line under the window row and
+// as a chip in the snapshot toolbar; edited inline in the row.
+
+async function saveWindowAnnotation(win, next) {
+  const updated = await api("/api/windows", {
+    method: "PATCH",
+    body: JSON.stringify({ windowId: win.id, annotation: next }),
+  });
+  // Reflect the new value locally and re-render so it shows immediately, in
+  // both the window list and the snapshot toolbar note.
+  const w = state.windows.find((item) => item.id === win.id);
+  if (w) w.annotation = updated.annotation || "";
+  renderWindows();
+  renderSnapshotNote();
 }
 
+// Swap an <input> into the row (Enter saves, Esc cancels, blur saves if
+// changed). renderWindows() is paused while state.noteEditingId is set so the
+// 3-5s polling re-render can't wipe the editor mid-typing.
+function startInlineNoteEdit(row, win) {
+  if (state.noteEditingId) return;
+  state.noteEditingId = win.id;
+  row.querySelector(".window-row-note")?.remove();
+  const editor = document.createElement("span");
+  editor.className = "window-row-note-edit";
+  editor.innerHTML = `<input type="text" autocomplete="off" spellcheck="false" aria-label="Note for ${escapeHtml(`${win.index}: ${win.name}`)}" placeholder="Note, e.g. waiting on CI #4567"><kbd>↵ save · esc</kbd>`;
+  const input = editor.querySelector("input");
+  input.value = win.annotation || "";
+  row.append(editor);
+  const finish = async (save) => {
+    if (state.noteEditingId !== win.id) return;
+    state.noteEditingId = "";
+    const next = input.value.trim();
+    if (save && next !== (win.annotation || "").trim()) {
+      try {
+        await saveWindowAnnotation(win, next);
+      } catch (error) {
+        setStatus(error.message || "Could not save note", false);
+        renderWindows();
+      }
+    } else {
+      renderWindows();
+    }
+  };
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.focus();
+  input.select();
+}
+
+// Edit the note of a window from outside its row (the snapshot toolbar chip).
+// If that window's row is on screen (desktop sidebar), edit inline there;
+// otherwise fall back to a prompt.
 async function editWindowAnnotation(win) {
+  if (isSidebarLayout() && state.targetPickerOpen && window.CSS?.escape) {
+    const row = els.mobileWindows.querySelector(`.window-row[data-window-id="${CSS.escape(win.id)}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "nearest" });
+      startInlineNoteEdit(row, win);
+      return;
+    }
+  }
   const current = win.annotation || "";
   const next = window.prompt(`Note for window "${win.index}: ${win.name}":`, current);
   if (next === null) return; // cancelled
   try {
-    const updated = await api("/api/windows", {
-      method: "PATCH",
-      body: JSON.stringify({ windowId: win.id, annotation: next }),
-    });
-    // Reflect the new value locally and re-render so it shows immediately, in
-    // both the window list and the snapshot toolbar note.
-    const w = state.windows.find((item) => item.id === win.id);
-    if (w) w.annotation = updated.annotation || "";
-    renderWindows();
-    renderSnapshotNote();
+    await saveWindowAnnotation(win, next.trim());
   } catch (error) {
     setStatus(error.message || "Could not save note", false);
   }
+}
+
+// ---- Pinned windows (desktop left pane) --------------------------------
+function windowIsPinned(win) {
+  const key = windowRecentKey(win);
+  return Boolean(key) && pinnedWindowsAtom.get().keys.includes(key);
+}
+
+function toggleWindowPin(win) {
+  const key = windowRecentKey(win);
+  if (!key) return;
+  const keys = pinnedWindowsAtom.get().keys;
+  pinnedWindowsAtom.set({ keys: keys.includes(key) ? keys.filter((k) => k !== key) : [...keys, key] });
+  renderWindows();
 }
 
 // The current window's note, shown in the snapshot toolbar right after the Lines
@@ -1534,29 +1641,130 @@ function buildWindowTree() {
   return repoList;
 }
 
+// Local-machine windows that need you: confident asks first, then unread. The
+// current window is never listed (you're looking at it). Same signals as the
+// row chips, so the group and the chips can't disagree.
+function windowsForAttentionGroup() {
+  const out = [];
+  for (const win of state.windows) {
+    if (win.id === state.windowId) continue;
+    const meta = state.windowMetadata[win.id] || {};
+    if (Boolean(meta.waitingForInput) && meta.waitingConfidence !== "low") out.push({ win, rank: 0 });
+    else if (isWindowUnread(win)) out.push({ win, rank: 1 });
+  }
+  return out.sort((a, b) => a.rank - b.rank || a.win.index - b.win.index).map((entry) => entry.win);
+}
+
+function updateSidebarToggleCount(count) {
+  if (!els.sidebarToggleCount) return;
+  els.sidebarToggleCount.textContent = String(count);
+  els.sidebarToggleCount.hidden = count === 0;
+}
+
 // One flat browser of every window on this machine, grouped repo -> directory
-// -> windows so any window is one tap away and sessions are organized by the
-// project + working copy they live in. (Quick-switch-to-recent lives in the
-// dedicated global recents popup in the topbar, so it isn't duplicated here.)
+// -> windows so any window is one tap away. Above the tree: "Pinned" (user-
+// chosen, desktop) and "Needs you" (asking / unread) so the likeliest next
+// switch is the first row. The type-to-jump filter prunes all three. (Quick-
+// switch-to-recent lives in the dedicated global recents popup in the topbar.)
 function renderWindows() {
+  if (state.noteEditingId) return; // keep the inline note editor alive
+  // The list is rebuilt on every activity/metadata poll; keep keyboard focus
+  // on the same row (or row tool) so Tab/arrow users aren't dropped every 3s.
+  const focused = document.activeElement instanceof Element ? document.activeElement.closest(".window-row") : null;
+  const focusedId = focused?.dataset.windowId || "";
+  const focusedTool = focused && document.activeElement !== focused
+    ? [...document.activeElement.classList].find((c) => c.startsWith("window-row-") && c !== "window-row-tool") || ""
+    : "";
   els.mobileWindows.innerHTML = "";
 
   if (state.windows.length === 0) {
     empty(els.mobileWindows, "No windows");
+    updateSidebarToggleCount(0);
     return;
   }
 
-  const tree = buildWindowTree();
-  for (const repo of tree) {
-    const repoLabel = repo.label || "No repo";
-    const winCount = repo.dirList.reduce((n, d) => n + d.wins.length, 0);
-    const repoHeader = document.createElement("div");
-    repoHeader.className = `window-group-header window-repo-header${repo.label ? "" : " window-repo-none"}`;
-    repoHeader.innerHTML = `
-      <span>${escapeHtml(repoLabel)}</span>
-      <span class="window-group-count">${winCount} win${winCount === 1 ? "" : "s"}</span>
+  const fullTree = buildWindowTree();
+  const filtering = state.windowFilter.trim() !== "";
+  const tree = filterWindowTree(fullTree, state.windowFilter);
+  // Per-window group context (repo label, directory basename, whether the
+  // directory spans several tmux sessions) so rows in the Pinned / Needs you
+  // groups render exactly like their tree twins.
+  const context = new Map();
+  for (const repo of fullTree) {
+    for (const dir of repo.dirList) {
+      const sessions = new Set(dir.wins.map((entry) => entry.sessionName));
+      const dirBasename = pathLabel(dir.cwd) || (dir.cwd ? dir.cwd : "(no cwd)");
+      for (const entry of dir.wins) {
+        context.set(entry.win.id, {
+          repoLabel: repo.label,
+          dirBasename,
+          sessionChip: sessions.size > 1 ? entry.sessionName : "",
+        });
+      }
+    }
+  }
+  const visibleIds = new Set(flattenWindowTree(tree).map((entry) => entry.win.id));
+
+  const appendRow = (win) => {
+    const meta = state.windowMetadata[win.id] || {};
+    const row = windowRow({
+      win,
+      meta,
+      ctx: context.get(win.id) || {},
+      active: win.id === state.windowId,
+      unread: isWindowUnread(win) && win.id !== state.windowId,
+      live: Boolean(state.windowActivity[win.id]),
+      waitingForInput: Boolean(meta.waitingForInput) && win.id !== state.windowId,
+      pinned: windowIsPinned(win),
+      onSelect: () => selectWindow(win.id),
+    });
+    if (state.mux === "rmux") {
+      const wrap = document.createElement("div");
+      wrap.className = "window-row-wrap";
+      wrap.append(row, rmuxShareWindowButton(win));
+      els.mobileWindows.append(wrap);
+    } else {
+      els.mobileWindows.append(row);
+    }
+  };
+  const appendGroupHeader = (label, count, className) => {
+    const header = document.createElement("div");
+    header.className = `window-group-header ${className}`;
+    header.innerHTML = `
+      <span>${escapeHtml(label)}</span>
+      <span class="window-group-count">${count}</span>
     `;
-    els.mobileWindows.append(repoHeader);
+    els.mobileWindows.append(header);
+  };
+
+  const attention = windowsForAttentionGroup();
+  updateSidebarToggleCount(attention.length);
+
+  const pinnedKeys = pinnedWindowsAtom.get().keys;
+  const pinned = pinnedKeys
+    .map((key) => state.windows.find((win) => windowRecentKey(win) === key))
+    .filter((win) => win && visibleIds.has(win.id));
+  if (pinned.length > 0) {
+    appendGroupHeader("Pinned", pinned.length, "window-pin-header");
+    pinned.forEach(appendRow);
+  }
+  const needs = attention.filter((win) => visibleIds.has(win.id));
+  if (needs.length > 0) {
+    appendGroupHeader("Needs you", needs.length, "window-attn-header");
+    needs.forEach(appendRow);
+  }
+
+  if (tree.length === 0) {
+    empty(els.mobileWindows, filtering ? "No matching windows" : "No windows");
+    return;
+  }
+  for (const repo of tree) {
+    const winCount = repo.dirList.reduce((n, d) => n + d.wins.length, 0);
+    appendGroupHeader(
+      repo.label || "No repo",
+      winCount,
+      `window-repo-header${repo.label ? "" : " window-repo-none"}`,
+    );
 
     for (const dir of repo.dirList) {
       // Directory sub-header: basename of the cwd, plus the branch when it adds
@@ -1572,47 +1780,64 @@ function renderWindows() {
         ${dir.worktree ? `<span class="window-dir-wt">↳ wt</span>` : ""}
       `;
       els.mobileWindows.append(dirHeader);
-
-      for (const { win, meta, sessionName } of dir.wins) {
-        const live = Boolean(state.windowActivity[win.id]);
-        const agentType = meta.agentType || "";
-        const turn = meta.turn || "";
-        const waitingForInput = Boolean(meta.waitingForInput) && win.id !== state.windowId;
-        const waitingConfidence = meta.waitingConfidence || "";
-        const unread = isWindowUnread(win) && win.id !== state.windowId;
-        // The directory header already carries cwd + branch, so per-window we
-        // drop the redundant cwd/branch chips and instead surface the session
-        // name (windows in one directory can span sessions) alongside the
-        // running command.
-        const metaBits = [sessionName ? `⧉ ${sessionName}` : "", win.activeCommand || ""]
-          .filter(Boolean)
-          .join("  ·  ");
-        const windowButton = itemButton({
-          active: win.id === state.windowId,
-          title: `${win.index}: ${win.name}`,
-          meta: metaBits || win.id,
-          badge: live ? "live" : "",
-          badgeGreen: live,
-          onClick: () => selectWindow(win.id),
-          className: `${state.mux === "rmux" ? "item window-item-main" : "item"} window-item-nested`,
-          agentType,
-          turn,
-          unread,
-          waitingForInput,
-          waitingConfidence,
-        });
-        if (state.mux === "rmux") {
-          const row = document.createElement("div");
-          row.className = "window-item-row window-item-nested-row";
-          row.append(windowButton, rmuxShareWindowButton(win));
-          els.mobileWindows.append(row);
-        } else {
-          els.mobileWindows.append(windowButton);
-        }
-        els.mobileWindows.append(windowAnnotationRow(win));
-      }
+      for (const { win } of dir.wins) appendRow(win);
     }
   }
+  syncWindowFilterCursor();
+  if (focusedId && window.CSS?.escape) {
+    const row = els.mobileWindows.querySelector(`.window-row[data-window-id="${CSS.escape(focusedId)}"]`);
+    const target = focusedTool ? row?.querySelector(`.${focusedTool}`) : row;
+    target?.focus({ preventScroll: true });
+  }
+}
+
+// ---- Filter keyboard cursor ----------------------------------------------
+function visibleWindowRows() {
+  return [...els.mobileWindows.querySelectorAll(".window-row[data-window-id]")];
+}
+
+function setWindowFilterCursor(id) {
+  state.windowFilterCursor = id;
+  for (const row of visibleWindowRows()) {
+    row.classList.toggle("kb-selected", Boolean(id) && row.dataset.windowId === id);
+  }
+}
+
+// After a re-render: while filtering, keep the cursor on a visible row (first
+// match by default so Enter is always meaningful); otherwise no cursor.
+function syncWindowFilterCursor() {
+  if (!state.windowFilter.trim()) {
+    setWindowFilterCursor("");
+    return;
+  }
+  const ids = visibleWindowRows().map((row) => row.dataset.windowId);
+  setWindowFilterCursor(ids.includes(state.windowFilterCursor) ? state.windowFilterCursor : ids[0] || "");
+}
+
+function moveWindowFilterCursor(delta) {
+  const rows = visibleWindowRows();
+  if (rows.length === 0) return;
+  const ids = rows.map((row) => row.dataset.windowId);
+  let i = ids.indexOf(state.windowFilterCursor);
+  i = i < 0 ? (delta > 0 ? 0 : ids.length - 1) : Math.max(0, Math.min(ids.length - 1, i + delta));
+  setWindowFilterCursor(ids[i]);
+  rows[i].scrollIntoView({ block: "nearest" });
+}
+
+function clearWindowFilter() {
+  state.windowFilter = "";
+  state.windowFilterCursor = "";
+  if (els.windowFilterInput) els.windowFilterInput.value = "";
+  renderWindows();
+}
+
+// Prev/next window in tree order (Alt+↑/↓), wrapping at the ends.
+function stepWindow(delta) {
+  const entries = flattenWindowTree(buildWindowTree());
+  if (entries.length === 0) return;
+  const current = entries.findIndex((entry) => entry.win.id === state.windowId);
+  const next = entries[current < 0 ? 0 : (current + delta + entries.length) % entries.length];
+  if (next) selectWindow(next.win.id);
 }
 
 // Gather the plain fields the pure window-id helpers need from app state. The
@@ -1814,15 +2039,102 @@ function directoryStatus(text) {
   return item;
 }
 
+// ---- Window list: bottom sheet (phone) vs left sidebar (desktop) ------------
+// Same #targetSheet element and render path in both layouts. At >= 900px the
+// CSS places it as a column of the app-shell grid; here we keep the JS state
+// (state.targetPickerOpen = "the list is visible"), the ARIA role, and the
+// persisted fold state in step with that.
+
+function isSidebarLayout() {
+  return Boolean(window.matchMedia && window.matchMedia("(min-width: 900px)").matches);
+}
+
+function isMacLike() {
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform || "");
+}
+
 function syncSheetOpenClass() {
+  // Boolean(): with every flag falsy the || chain yields undefined, and
+  // classList.toggle(name, undefined) is a plain toggle, not "remove".
   document.body.classList.toggle(
     "sheet-open",
-    state.targetPickerOpen || state.directoryPickerOpen || state.pinsSheetOpen,
+    Boolean((state.targetPickerOpen && !isSidebarLayout()) || state.directoryPickerOpen || state.pinsSheetOpen),
   );
+}
+
+function applySidebarCollapsed(collapsed) {
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  if (!els.sidebarToggle) return;
+  const combo = isMacLike() ? "⌘B" : "Ctrl+B";
+  const label = `${collapsed ? "Expand" : "Collapse"} window list`;
+  els.sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
+  els.sidebarToggle.setAttribute("aria-label", label);
+  els.sidebarToggle.title = `${label} (${combo})`;
+}
+
+// persist:false for programmatic reveals (e.g. "pick a machine") so they don't
+// overwrite a fold preference the user chose.
+function expandSidebar({ persist = true } = {}) {
+  if (persist) sidebarAtom.set({ collapsed: false });
+  applySidebarCollapsed(false);
+  state.targetPickerOpen = true;
+  syncSheetOpenClass();
+  // Note: while the sidebar is open the 3s activity poll runs continuously
+  // (as it did with the sheet open); it backs off on slow responses.
+  startActivityPolling();
+}
+
+function collapseSidebar({ persist = true } = {}) {
+  if (persist) sidebarAtom.set({ collapsed: true });
+  applySidebarCollapsed(true);
+  state.targetPickerOpen = false;
+  syncSheetOpenClass();
+  stopActivityPolling();
+}
+
+function toggleSidebar() {
+  if (!isSidebarLayout()) {
+    if (state.targetPickerOpen) closeTargetPicker();
+    else openTargetPicker();
+    return;
+  }
+  if (document.body.classList.contains("sidebar-collapsed")) expandSidebar();
+  else collapseSidebar();
+}
+
+// Apply the layout mode — at boot and whenever the viewport crosses 900px.
+function syncSidebarMode() {
+  const sidebar = isSidebarLayout();
+  document.body.classList.toggle("sidebar-layout", sidebar);
+  if (els.windowFilterHint) els.windowFilterHint.textContent = isMacLike() ? "⌘K" : "Ctrl K";
+  if (sidebar) {
+    els.targetPanel?.setAttribute("role", "complementary");
+    els.targetPanel?.removeAttribute("aria-modal");
+    els.targetSheet.hidden = false;
+    if (sidebarAtom.get().collapsed) collapseSidebar({ persist: false });
+    else expandSidebar({ persist: false });
+  } else {
+    els.targetPanel?.setAttribute("role", "dialog");
+    els.targetPanel?.setAttribute("aria-modal", "true");
+    document.body.classList.remove("sidebar-collapsed");
+    closeTargetPicker({ force: true });
+  }
+  renderWindows(); // the pin control only exists in the sidebar layout
+}
+
+function focusWindowFilter() {
+  if (isSidebarLayout()) expandSidebar();
+  else if (!state.targetPickerOpen) openTargetPicker();
+  els.windowFilterInput?.focus();
+  els.windowFilterInput?.select();
 }
 
 function showTargetPicker() {
   closeDirectoryPicker();
+  if (isSidebarLayout()) {
+    expandSidebar({ persist: false });
+    return;
+  }
   // The full window list and the recents quick-switch popup are two views of
   // the same "switch window" intent — don't show both at once. Opening the
   // picker dismisses the recents popup.
@@ -1840,7 +2152,11 @@ function openTargetPicker() {
   });
 }
 
-function closeTargetPicker() {
+// In the sidebar layout the list is persistent: the many "close the picker
+// after a pick" callers (selectWindow, directory/pins sheets, recents, jump-
+// to-attention) must not fold it. Only the layout switch passes force.
+function closeTargetPicker({ force = false } = {}) {
+  if (isSidebarLayout() && !force) return;
   state.targetPickerOpen = false;
   els.targetSheet.hidden = true;
   syncSheetOpenClass();
@@ -4254,6 +4570,7 @@ async function selectWindow(windowId) {
   // open sheet while panes load over a flaky link. The actual switch
   // continues in the background and the snapshot updates when it lands.
   closeTargetPicker();
+  if (state.windowFilter) clearWindowFilter();
   await loadPanes();
 }
 
@@ -6115,7 +6432,15 @@ els.machineSelect?.addEventListener("change", () => {
     setStatus(error.message, false);
   });
 });
-els.openTargetPicker.addEventListener("click", openTargetPicker);
+els.openTargetPicker.addEventListener("click", () => {
+  if (isSidebarLayout()) {
+    // Desktop: the list is the sidebar — reveal it and jump to the filter.
+    expandSidebar();
+    els.windowFilterInput?.focus();
+    return;
+  }
+  openTargetPicker();
+});
 // Copy the current window's full descriptor (stable id + context). Lives on its
 // own button so the title keeps its tap-to-open-picker behavior. Flips to a
 // check icon for ~1.2s on success; falls back to selecting the title text if
@@ -6162,7 +6487,7 @@ function setGlobalRecentsOpen(open) {
   if (!els.globalRecentsMenu) return;
   if (open) {
     // Mutually exclusive with the full window-list picker (same intent).
-    if (state.targetPickerOpen) closeTargetPicker();
+    if (state.targetPickerOpen && !isSidebarLayout()) closeTargetPicker();
     renderGlobalRecentsMenu();
   }
   els.globalRecentsMenu.hidden = !open;
@@ -6279,8 +6604,8 @@ if (els.needsAttention) {
 if (els.exitCopyMode) {
   els.exitCopyMode.addEventListener("click", exitCopyModeNow);
 }
-els.closeTargetPicker.addEventListener("click", closeTargetPicker);
-els.targetBackdrop.addEventListener("click", closeTargetPicker);
+els.closeTargetPicker.addEventListener("click", () => closeTargetPicker());
+els.targetBackdrop.addEventListener("click", () => closeTargetPicker());
 els.openDirectoryPicker.addEventListener("click", openDirectoryPicker);
 els.closeDirectoryPicker.addEventListener("click", closeDirectoryPicker);
 els.directoryBackdrop.addEventListener("click", closeDirectoryPicker);
@@ -6408,7 +6733,7 @@ document.addEventListener("keydown", (event) => {
     setSnapshotFullscreen(false);
     return;
   }
-  if (event.key === "Escape" && state.targetPickerOpen) {
+  if (event.key === "Escape" && state.targetPickerOpen && !isSidebarLayout()) {
     closeTargetPicker();
     return;
   }
@@ -6490,6 +6815,82 @@ window.addEventListener("popstate", () => {
     forceUrlTarget: true,
   });
 });
+
+// ---- Window list: filter, fold, footer, shortcuts ------------------------
+if (els.windowFilterInput) {
+  els.windowFilterInput.addEventListener("input", () => {
+    state.windowFilter = els.windowFilterInput.value;
+    renderWindows();
+  });
+  els.windowFilterInput.addEventListener("keydown", (event) => {
+    if (event.isComposing) return;
+    if (!event.altKey && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      // Plain arrows move the cursor; Alt+arrows bubble up to prev/next window.
+      event.preventDefault();
+      event.stopPropagation();
+      moveWindowFilterCursor(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      const id = state.windowFilterCursor || visibleWindowRows()[0]?.dataset.windowId;
+      if (id) selectWindow(id);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation(); // don't also trigger the document-level sheet close
+      if (els.windowFilterInput.value) {
+        clearWindowFilter();
+      } else {
+        els.windowFilterInput.blur();
+        if (!isSidebarLayout()) closeTargetPicker();
+      }
+    }
+  });
+}
+els.sidebarToggle?.addEventListener("click", toggleSidebar);
+els.toggleNewSession?.addEventListener("click", () => {
+  if (!els.sessionManagement) return;
+  const show = els.sessionManagement.hidden;
+  els.sessionManagement.hidden = !show;
+  els.toggleNewSession.setAttribute("aria-expanded", String(show));
+  if (show) els.sessionNameInput.focus();
+});
+// Desktop footer shortcuts reuse the More-menu items' handlers.
+els.sidebarNewWindow?.addEventListener("click", () => els.newWindow?.click());
+els.sidebarDuplicateWindow?.addEventListener("click", () => els.duplicateWindow?.click());
+els.sidebarTranscript?.addEventListener("click", () => els.showTranscript?.click());
+
+// Ctrl/⌘+K: jump to the window filter (opens the sheet / expands the sidebar).
+// Ctrl/⌘+B: fold/unfold the desktop sidebar. Alt+↑/↓: previous/next window.
+// None of these fire in fullscreen, where keys belong to the terminal.
+document.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented || event.isComposing || state.snapshotFullscreen) return;
+  const mod = event.metaKey || event.ctrlKey;
+  const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+  if (mod && !event.altKey && !event.shiftKey && key === "k") {
+    event.preventDefault();
+    focusWindowFilter();
+    return;
+  }
+  if (mod && !event.altKey && !event.shiftKey && key === "b") {
+    if (!isSidebarLayout()) return;
+    event.preventDefault();
+    toggleSidebar();
+    return;
+  }
+  if (event.altKey && !mod && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    event.preventDefault();
+    stepWindow(event.key === "ArrowDown" ? 1 : -1);
+  }
+});
+
+syncSidebarMode();
+if (window.matchMedia) {
+  window.matchMedia("(min-width: 900px)").addEventListener("change", syncSidebarMode);
+}
 
 renderComposerMode();
 initComposerEditor();
