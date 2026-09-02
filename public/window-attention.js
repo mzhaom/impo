@@ -43,3 +43,36 @@ export function attentionReason(meta, unread) {
   // output changing is progress, not a request for attention.
   return null;
 }
+
+// --- disconnect presentation ------------------------------------------------
+
+// The snapshot's pre-selection placeholder is not user content.
+const SNAPSHOT_PLACEHOLDERS = new Set(["Select a window.", "Select a machine."]);
+
+export function isSnapshotPlaceholderText(text) {
+  return SNAPSHOT_PLACEHOLDERS.has(String(text || "").trim());
+}
+
+// How to present "no machine is connected".
+//
+// The connector-help panel is absolutely positioned OVER the snapshot, so
+// showing it replaces whatever the user was reading. A machine dropping is
+// routinely momentary (controller deploy, agent restart, wifi blip), and
+// replacing a pane mid-read over a 20-second outage is far worse than leaving
+// it visible. So the panel is for someone with nothing to lose:
+//   * onboarding  — no machines and an empty/placeholder pane: show the panel.
+//   * degrade     — a machine dropped but there is content on screen, or we are
+//                   inside the reconnect grace window: keep the content, grey it.
+//   * normal      — a machine is connected: neither.
+// Returns { showHelp, preserveContent }.
+export function disconnectPresentation({
+  hubMode = false,
+  machineCount = 0,
+  snapshotText = "",
+  inGrace = false,
+} = {}) {
+  const noMachines = Boolean(hubMode) && machineCount === 0;
+  const hasContent = Boolean(String(snapshotText || "").trim()) && !isSnapshotPlaceholderText(snapshotText);
+  const preserveContent = noMachines && (Boolean(inGrace) || hasContent);
+  return { showHelp: noMachines && !preserveContent, preserveContent };
+}
