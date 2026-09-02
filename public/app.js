@@ -11,7 +11,7 @@ import {
 import { windowKey, windowStableId, windowDescriptor, windowTitleText, windowHoverDetail, mergeRecent, pruneRecent } from "./window-id.js";
 import { fetchJsonWithTimeout } from "./fetch-timeout.js";
 import { filterWindowTree, flattenWindowTree, splitRedundantPrefix } from "./window-filter.js";
-import { ATTENTION_RANK as ATTN_RANK, attentionReason } from "./window-attention.js";
+import { ATTENTION_RANK as ATTN_RANK, attentionReason, disconnectPresentation } from "./window-attention.js";
 
 const SNAPSHOT_BOTTOM_SLOP_PX = 8;
 const MAX_WAVEFORM_SAMPLES = 40;
@@ -1008,7 +1008,16 @@ function setStatus(text, ok = true) {
   els.mobileConnectionStatus.style.color = ok ? "" : "#a73535";
 }
 
-function resetTmuxState(message = "Select a window.") {
+// Full teardown of the focused machine's state.
+//
+// `preserveSnapshot` keeps the pane's existing text on screen instead of
+// replacing it with `message`. A machine going away is not a reason to destroy
+// what the user was reading — a deploy or agent restart takes seconds, and the
+// text is the whole reason they had the page open. The caller greys the pane
+// (renderConnectorHelp -> .disconnected) and the banner/status line carries the
+// explanation, so nothing is hidden; it just isn't erased. The snapshot is
+// re-rendered from the agent as soon as one is back.
+function resetTmuxState(message = "Select a window.", { preserveSnapshot = false } = {}) {
   stopMetadataPolling();
   // Any full reset means we're no longer holding a window through a blip.
   setReconnectingBanner(false);
@@ -1027,7 +1036,7 @@ function resetTmuxState(message = "Select a window.") {
   renderModeBar();
   updateAttentionIndicators(); // clears title/favicon/pill
   resetDirectoryNavigator();
-  updateSnapshotText(message, { forceScrollBottom: true });
+  if (!preserveSnapshot) updateSnapshotText(message, { forceScrollBottom: true });
 }
 
 async function loadRuntimeAndMachines() {
@@ -1141,16 +1150,49 @@ function renderMachinePicker() {
   els.machineSelect.disabled = state.machines.length === 0 && !state.machineId;
 }
 
-// Show clone+connector instructions only in hub mode with no machine online.
-// The controller URL is the page's own origin (so it's correct on whatever
-// domain the user reached, e.g. https://example.ts.net); the clone URL comes
-// from /api/runtime. Hidden in every other state.
+// Show clone+connector instructions only in hub mode with no machine online —
+// and only for a user who has nothing to lose by it. The controller URL is the
+// page's own origin (so it's correct on whatever domain the user reached, e.g.
+// https://example.ts.net); the clone URL comes from /api/runtime.
+//
+// WHY THIS IS GATED ON MORE THAN "no machines": this panel is absolutely
+// positioned over the snapshot (inset: 0), so showing it REPLACES whatever the
+// user was reading. A machine dropping is routinely momentary — a controller
+// deploy, an agent restart, a wifi blip — and yanking the pane out from under
+// someone mid-read is the worst possible response to a 20-second outage. Two
+// guards:
+//   * during reconnect grace we are actively holding the window on screen (see
+//     enterReconnectGrace) and a "Reconnecting…" banner already says so, so the
+//     onboarding panel must stay out of the way;
+//   * once a pane has rendered, the user has content worth keeping. Fall back to
+//     dimming it (readable, not erased) rather than covering it.
+// A first-time user with an empty snapshot still gets the full instructions,
+// which is the case this panel was written for.
 function renderConnectorHelp() {
   if (!els.connectorHelp) return;
-  const showHelp =
-    state.runtimeMode === "hub" && state.machines.length === 0;
+  const { showHelp, preserveContent } = disconnectPresentation({
+    hubMode: state.runtimeMode === "hub",
+    machineCount: state.machines.length,
+    snapshotText: els.snapshot?.textContent || "",
+    inGrace: inReconnectGrace(),
+  });
   els.connectorHelp.hidden = !showHelp;
+  // "disconnected" greys the pane but keeps it readable; "dimmed" is the old
+  // near-invisible fade, correct only when the help panel covers it anyway.
   els.snapshot.classList.toggle("dimmed", showHelp);
+  els.snapshot.classList.toggle("disconnected", preserveContent);
+  // Nothing can be sent to a machine that isn't there. Reuse the offline
+  // treatment so "can't act right now" looks the same however it was caused —
+  // but never fight applyNetworkTroubleUi, which owns this while WE are offline.
+  if (!state.networkTrouble) {
+    els.inputArea?.classList.toggle("offline", preserveContent);
+    for (const btn of networkActionButtons()) {
+      if (preserveContent) btn.disabled = true;
+      else if (btn === els.submitText) {
+        if (!composerSendInFlight) btn.disabled = false;
+      } else btn.disabled = false;
+    }
+  }
   if (!showHelp) return;
   const controllerUrl = window.location.origin;
   els.connectorClone.textContent = `git clone ${state.cloneUrl} && cd impo && npm install`;
@@ -3938,9 +3980,10 @@ async function refreshTree({
           ? "No machines online."
           : "Select a machine."
         : `Waiting for ${machineLabelFor(state.machineId)} to reconnect.`;
-      resetTmuxState(
-        message,
-      );
+      // A machine we were LIVE on just went away: keep its last frame on screen
+      // (greyed, via renderConnectorHelp) rather than wiping it. Selecting a
+      // machine / having none ever is a different, contentless case.
+      resetTmuxState(message, { preserveSnapshot: droppedMachine });
       setStatus(message.replace(/\.$/, ""), false);
       // No machine focused, but others may be online and need you — keep the
       // cross-machine attention poll running so the pill/badge still works.

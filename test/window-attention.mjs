@@ -52,3 +52,61 @@ for (const reason of ["question", "finished", "unverified"]) {
 }
 
 console.log("window-attention: ok");
+
+// --- disconnect presentation ------------------------------------------------
+// The regression: a momentary machine drop used to replace the pane with the
+// connector-onboarding panel, destroying what the user was reading.
+
+const { disconnectPresentation, isSnapshotPlaceholderText } = await import("../public/window-attention.js");
+
+// A machine is connected: neither treatment, whatever the pane holds.
+assert.deepEqual(
+  disconnectPresentation({ hubMode: true, machineCount: 1, snapshotText: "$ vim notes.md" }),
+  { showHelp: false, preserveContent: false },
+);
+
+// THE REGRESSION: machine dropped while the user had content on screen.
+// Keep it (greyed); never cover it with onboarding instructions.
+assert.deepEqual(
+  disconnectPresentation({ hubMode: true, machineCount: 0, snapshotText: "$ vim notes.md" }),
+  { showHelp: false, preserveContent: true },
+  "a drop with content on screen must preserve, not replace",
+);
+
+// Inside the reconnect grace window we hold the window on screen even if the
+// pane happens to be empty — a banner already explains it.
+assert.deepEqual(
+  disconnectPresentation({ hubMode: true, machineCount: 0, snapshotText: "", inGrace: true }),
+  { showHelp: false, preserveContent: true },
+);
+
+// Onboarding is still the right answer for someone with nothing to lose.
+assert.deepEqual(
+  disconnectPresentation({ hubMode: true, machineCount: 0, snapshotText: "" }),
+  { showHelp: true, preserveContent: false },
+);
+// The placeholder is not user content.
+assert.deepEqual(
+  disconnectPresentation({ hubMode: true, machineCount: 0, snapshotText: "Select a window." }),
+  { showHelp: true, preserveContent: false },
+);
+assert.deepEqual(
+  disconnectPresentation({ hubMode: true, machineCount: 0, snapshotText: "   \n  " }),
+  { showHelp: true, preserveContent: false },
+);
+
+// Local (non-hub) mode never shows the hub onboarding panel.
+assert.deepEqual(
+  disconnectPresentation({ hubMode: false, machineCount: 0, snapshotText: "" }),
+  { showHelp: false, preserveContent: false },
+);
+
+// Defensive: no arguments at all must not claim there is content to preserve.
+assert.deepEqual(disconnectPresentation(), { showHelp: false, preserveContent: false });
+
+assert.equal(isSnapshotPlaceholderText("Select a window."), true);
+assert.equal(isSnapshotPlaceholderText("  Select a machine.  "), true);
+assert.equal(isSnapshotPlaceholderText("$ real output"), false);
+assert.equal(isSnapshotPlaceholderText(""), false);
+
+console.log("window-attention: disconnect presentation ok");
