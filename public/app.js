@@ -1445,7 +1445,9 @@ function windowRow({ win, meta, ctx, active, unread, live, waitingForInput, pinn
   });
   row.querySelector(".window-row-pin").addEventListener("click", (event) => {
     event.stopPropagation();
-    toggleWindowPin(win);
+    // Server-backed now: it reports its own failure via setStatus and rolls the
+    // optimistic flip back, so nothing further to do here.
+    toggleWindowPin(win).catch(() => {});
   });
   return row;
 }
@@ -1624,16 +1626,72 @@ async function editWindowAnnotation(win) {
 }
 
 // ---- Pinned windows (desktop left pane) --------------------------------
+//
+// The pin lives ON THE WINDOW as the @tm_pinned tmux option (same mechanism as
+// the @tm_annotation note), not in localStorage. A pin is a property of the
+// window, so it must survive a different browser, a different device, a cleared
+// store and a controller redeploy — localStorage gave none of that (reported
+// 2026-09-03: "pinned session is not persist, can you save the pinned state to
+// tmux window metadata like note, so it survives").
+//
+// pinnedWindowsAtom is kept ONLY to migrate existing local pins once (below);
+// it is no longer the source of truth.
 function windowIsPinned(win) {
-  const key = windowRecentKey(win);
-  return Boolean(key) && pinnedWindowsAtom.get().keys.includes(key);
+  return Boolean(win && win.pinned);
 }
 
-function toggleWindowPin(win) {
-  const key = windowRecentKey(win);
-  if (!key) return;
+async function toggleWindowPin(win) {
+  if (!win) return;
+  const next = !windowIsPinned(win);
+  // Optimistic: reflect immediately, then reconcile with the server's answer so
+  // the pin doesn't visibly lag a round trip.
+  const local = state.windows.find((item) => item.id === win.id);
+  if (local) local.pinned = next;
+  renderWindows();
+  try {
+    const updated = await api("/api/windows", {
+      method: "PATCH",
+      body: JSON.stringify({ windowId: win.id, pinned: next }),
+    });
+    if (local) local.pinned = Boolean(updated.pinned);
+  } catch (error) {
+    if (local) local.pinned = !next; // roll back a failed write
+    setStatus(`Could not ${next ? "pin" : "unpin"}: ${error.message}`, false);
+  }
+  renderWindows();
+}
+
+// One-time migration of pins that were stored locally before they moved onto the
+// window. Runs after the first window list arrives, pins anything the old atom
+// remembered that isn't already pinned server-side, then clears the atom so this
+// never runs twice. Best-effort: a failure just leaves the atom for next time.
+let pinMigrationDone = false;
+async function migrateLocalPinsOnce() {
+  if (pinMigrationDone) return;
   const keys = pinnedWindowsAtom.get().keys;
-  pinnedWindowsAtom.set({ keys: keys.includes(key) ? keys.filter((k) => k !== key) : [...keys, key] });
+  if (!keys.length) {
+    pinMigrationDone = true;
+    return;
+  }
+  if (!state.windows.length) return; // wait for a real list before deciding
+  pinMigrationDone = true;
+  const wanted = state.windows.filter(
+    (win) => keys.includes(windowRecentKey(win)) && !win.pinned,
+  );
+  for (const win of wanted) {
+    try {
+      await api("/api/windows", {
+        method: "PATCH",
+        body: JSON.stringify({ windowId: win.id, pinned: true }),
+      });
+      win.pinned = true;
+    } catch {
+      // leave the atom in place so the next session can retry
+      pinMigrationDone = false;
+      return;
+    }
+  }
+  pinnedWindowsAtom.set({ keys: [] });
   renderWindows();
 }
 
@@ -1853,10 +1911,9 @@ function renderWindows() {
   // (Reported 2026-09-03: "When a session is pinned, it is shown in both pinned
   // section and bottom section, don't do that, pin is just an ordering
   // preference.") `hoistedIds` is what the tree below skips.
-  const pinnedKeys = pinnedWindowsAtom.get().keys;
-  const pinned = pinnedKeys
-    .map((key) => state.windows.find((win) => windowRecentKey(win) === key))
-    .filter((win) => win && visibleIds.has(win.id));
+  // Source of truth is the window's own @tm_pinned flag (server-side), so the
+  // order follows the window list rather than a local key array.
+  const pinned = state.windows.filter((win) => windowIsPinned(win) && visibleIds.has(win.id));
   for (const win of pinned) hoistedIds.add(win.id);
   if (pinned.length > 0) {
     appendGroupHeader("Pinned", pinned.length, "window-pin-header");
@@ -4086,6 +4143,8 @@ async function refreshTree({
     if (state.treeLoadGeneration !== treeLoadGeneration) return;
     state.sessions = tree.sessions || [];
     state.windows = (tree.windows || []).map((w) => ({ ...w })); // defensive copy
+    // Carry pins that predate server-side storage onto the windows themselves.
+    migrateLocalPinsOnce().catch(() => {});
     await applyTreeAndSelectWindow({ urlTarget, forceUrlTarget });
     if (state.treeLoadGeneration !== treeLoadGeneration) return;
     if (state.targetPickerOpen) {

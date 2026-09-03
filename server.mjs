@@ -1939,6 +1939,13 @@ async function setWindowAnnotation(windowId, annotation) {
   });
 }
 
+// Persist the pin flag on the WINDOW as the @tm_pinned user option, so a pin
+// survives a browser change, a different device, and a controller redeploy.
+// (It lived only in localStorage, so it did not — reported 2026-09-03.)
+async function setWindowPinned(windowId, pinned) {
+  return currentWindowRuntime().setWindowPinned({ windowId, pinned });
+}
+
 async function killWindow(windowId) {
   return currentWindowRuntime().closeWindow({ windowId });
 }
@@ -4588,9 +4595,13 @@ async function handleApi(req, res, url) {
   if (req.method === "PATCH" && url.pathname === "/api/windows") {
     const body = await readJsonBody(req);
     const windowId = requireId(body.windowId, "window");
-    // `annotation` present -> set the follow-up note; otherwise rename.
+    // `annotation` present -> set the follow-up note; `pinned` -> the pin flag;
+    // otherwise rename. Each key is checked with hasOwnProperty so an explicit
+    // false/"" is honored rather than falling through to a rename.
     if (Object.prototype.hasOwnProperty.call(body, "annotation")) {
       sendJson(res, 200, await setWindowAnnotation(windowId, body.annotation));
+    } else if (Object.prototype.hasOwnProperty.call(body, "pinned")) {
+      sendJson(res, 200, await setWindowPinned(windowId, Boolean(body.pinned)));
     } else {
       sendJson(res, 200, await renameWindow(windowId, body.name));
     }
