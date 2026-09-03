@@ -70,8 +70,8 @@ const tmuxArgs = args[0] === "-u" ? args.slice(1) : args;
 const command = tmuxArgs[0] || "";
 const has = (value) => tmuxArgs.includes(value);
 const windows = [
-  "@1\\t0\\tcodex-one\\t1\\t1\\t*\\tcodex\\t/dev/ttys001\\t/repo-one\\t",
-  "@2\\t1\\tcodex-two\\t0\\t1\\t-\\tcodex\\t/dev/ttys002\\t/repo-two\\t",
+  "@1\\t0\\tcodex-one\\t1\\t1\\t*\\tcodex\\t/dev/ttys001\\t/repo-one\\t\\t",
+  "@2\\t1\\tcodex-two\\t0\\t1\\t-\\tcodex\\t/dev/ttys002\\t/repo-two\\t\\t",
 ];
 const panes = [
   "%1\\t0\\t1\\tcodex\\t/repo-one\\t100\\t32\\t\\t100\\tCodex one",
