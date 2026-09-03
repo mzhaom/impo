@@ -1028,9 +1028,30 @@ function loadChat() {
   }
 }
 
+// Persist the per-pane chat echo. This is DECORATIVE — it must never throw into
+// its caller: on iOS WebKit a full localStorage raises QuotaExceededError, and
+// sendKey()/addChat() sit directly in front of the real request, so a throw here
+// aborted the action before it was ever issued (a reported "up/down/enter don't
+// respond", where telemetry showed key_send followed by key_failed "The quota
+// has been exceeded" and NO /api/key call). createPersistedAtom already guards
+// its writes the same way; this path was simply missed.
+//
+// On quota failure, drop this pane's stored echo and retry once with a shorter
+// tail: the log is the least valuable thing in storage, so it should be what
+// gets evicted rather than blocking input.
 function saveChat() {
   if (!state.paneId) return;
-  localStorage.setItem(paneChatKey(), JSON.stringify(state.chat.slice(-80)));
+  const key = paneChatKey();
+  try {
+    localStorage.setItem(key, JSON.stringify(state.chat.slice(-80)));
+  } catch {
+    try {
+      localStorage.removeItem(key);
+      localStorage.setItem(key, JSON.stringify(state.chat.slice(-10)));
+    } catch {
+      // Storage is unusable (full/blocked). The echo is lost; input still works.
+    }
+  }
 }
 
 function nowLabel() {
@@ -1823,10 +1844,20 @@ function renderWindows() {
   const attention = windowsForAttentionGroup();
   updateSidebarToggleCount(attention.length);
 
+  // Windows already shown in a group above the tree (Pinned). They are skipped
+  // when the repo/dir tree renders so a window is listed exactly once.
+  const hoistedIds = new Set();
+
+  // Pinning is an ORDERING preference, not a second copy: a pinned window moves
+  // to the top, it does not appear both here and again in its repo/dir group.
+  // (Reported 2026-09-03: "When a session is pinned, it is shown in both pinned
+  // section and bottom section, don't do that, pin is just an ordering
+  // preference.") `hoistedIds` is what the tree below skips.
   const pinnedKeys = pinnedWindowsAtom.get().keys;
   const pinned = pinnedKeys
     .map((key) => state.windows.find((win) => windowRecentKey(win) === key))
     .filter((win) => win && visibleIds.has(win.id));
+  for (const win of pinned) hoistedIds.add(win.id);
   if (pinned.length > 0) {
     appendGroupHeader("Pinned", pinned.length, "window-pin-header");
     pinned.forEach(appendRow);
@@ -1841,15 +1872,26 @@ function renderWindows() {
     empty(els.mobileWindows, filtering ? "No matching windows" : "No windows");
     return;
   }
+  // Rows hoisted into the Pinned group are omitted here so a window is listed
+  // exactly once. Counts and headers follow the rows: a directory whose windows
+  // are all pinned renders no empty sub-header, and a repo left with nothing
+  // renders no header at all.
+  const treeWins = (dir) => dir.wins.filter(({ win }) => !hoistedIds.has(win.id));
+  let renderedAny = false;
   for (const repo of tree) {
-    const winCount = repo.dirList.reduce((n, d) => n + d.wins.length, 0);
+    const dirs = repo.dirList
+      .map((dir) => ({ dir, wins: treeWins(dir) }))
+      .filter(({ wins }) => wins.length > 0);
+    const winCount = dirs.reduce((n, d) => n + d.wins.length, 0);
+    if (winCount === 0) continue;
+    renderedAny = true;
     appendGroupHeader(
       repo.label || "No repo",
       winCount,
       `window-repo-header${repo.label ? "" : " window-repo-none"}`,
     );
 
-    for (const dir of repo.dirList) {
+    for (const { dir, wins } of dirs) {
       // Directory sub-header: basename of the cwd, plus the branch when it adds
       // info. With `git worktree add ../foo foo` the dir and branch usually
       // share a name, so we only show the branch chip when it differs.
@@ -1863,8 +1905,13 @@ function renderWindows() {
         ${dir.worktree ? `<span class="window-dir-wt">↳ wt</span>` : ""}
       `;
       els.mobileWindows.append(dirHeader);
-      for (const { win } of dir.wins) appendRow(win);
+      for (const { win } of wins) appendRow(win);
     }
+  }
+  // Everything visible was pinned: the tree itself is legitimately empty, but
+  // the list is not — don't claim "No windows" under a populated Pinned group.
+  if (!renderedAny && pinned.length === 0) {
+    empty(els.mobileWindows, filtering ? "No matching windows" : "No windows");
   }
   syncWindowFilterCursor();
   if (focusedId && window.CSS?.escape) {
@@ -5386,7 +5433,20 @@ async function sendKey(key) {
     return;
   }
   logClientEvent("key_send", { key });
-  addChat("user", `[${key}]`, "key");
+  // The chat echo is decorative and must not be able to block the actual key.
+  // addChat() touches localStorage + renders, either of which can throw on iOS
+  // WebKit; a throw here aborted the send BEFORE api("/api/key") was issued, so
+  // the key never reached the pane and the button looked dead. Same guard the
+  // composer's send path already had.
+  try {
+    addChat("user", `[${key}]`, "key");
+  } catch (chatError) {
+    logClientEvent("key_ui_step_failed", {
+      key,
+      step: "echo",
+      message: String((chatError && chatError.message) || chatError || "").slice(0, 200),
+    });
+  }
   await api("/api/key", {
     method: "POST",
     body: JSON.stringify({ paneId: state.paneId, key }),
