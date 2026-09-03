@@ -76,3 +76,27 @@ export function disconnectPresentation({
   const preserveContent = noMachines && (Boolean(inGrace) || hasContent);
   return { showHelp: noMachines && !preserveContent, preserveContent };
 }
+
+// --- attention freshness -----------------------------------------------------
+
+// Default: how long attention data may age before the "a question is waiting"
+// affordance stops being trustworthy. Generous relative to the ~5s poll —
+// /api/attention brokers capturePane across every window on every machine and
+// routinely takes seconds, so this decides when we ADMIT uncertainty, not when
+// we hide a real signal.
+export const ATTENTION_STALE_MS = 20_000;
+
+// Should the affordance say "unknown" rather than "nothing is waiting"?
+//
+// The bug this exists for: /api/attention failures were swallowed ("keep the
+// last known attention"), so a 21s timeout left the array stale while the dot
+// sat dark — indistinguishable from a genuinely calm window. A user reported
+// "Answer question doesn't seem to work" in exactly that state.
+//
+// `lastOkMs` is 0 when attention has NEVER loaded: that is "absent", not
+// "stale", and must not light the uncertainty marker on a fresh page.
+export function attentionUnknown({ lastOkMs = 0, now = Date.now(), pending = false, staleMs = ATTENTION_STALE_MS } = {}) {
+  if (pending) return false;      // we have a confident signal; nothing to hedge
+  if (!lastOkMs) return false;    // never loaded yet
+  return now - lastOkMs > staleMs;
+}
