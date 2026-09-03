@@ -158,3 +158,27 @@ assert.equal(md2["@x"].repo, null, "resolver error -> null");
 assert.equal(md2["@x"].agentType, "claude", "live field still computed");
 
 console.log("window-metadata unit tests passed");
+
+// --- agent aliases -----------------------------------------------------------
+// Reported 2026-09-03: "This is a agy session, answer question doesn't work.
+// Also enhance detection to use a Gemini icon in window list". `agy` is Google
+// Antigravity (ANTIGRAVITY_AGENT=1, MODEL_GOOGLE_GEMINI_*), a Gemini coding
+// agent. It was in no agent list, so such a window detected as NO agent — which
+// is why the agent-specific UI ("Answer question") was missing, and why it had
+// no icon. Both symptoms are the one missing mapping.
+assert.equal(detectAgentType("agy"), "gemini", "agy is a Gemini agent (Antigravity)");
+assert.equal(detectAgentType("AGY"), "gemini", "detection is case-insensitive");
+assert.equal(detectAgentFromCommandLine("/home/u/.local/bin/agy"), "gemini");
+assert.equal(detectAgentFromCommandLine("node /opt/agy/cli.js --resume"), "gemini");
+// The alias must resolve to its FAMILY, never leak the binary name — the icon
+// map and turn detection are keyed on "gemini".
+for (const probe of ["agy", "/usr/bin/agy chat"]) {
+  const got = detectAgentType(probe) || detectAgentFromCommandLine(probe);
+  assert.equal(got, "gemini", `${probe} must resolve to the gemini family`);
+}
+// Still no false positives on lookalikes.
+assert.equal(detectAgentType("agyle"), null);
+assert.equal(detectAgentType("legacy"), null);
+assert.equal(detectAgentFromCommandLine("node /opt/agy-tools/cli.js"), null);
+
+console.log("window-metadata: agent aliases ok");
