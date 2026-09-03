@@ -11,7 +11,7 @@ import {
 import { windowKey, windowStableId, windowDescriptor, windowTitleText, windowHoverDetail, mergeRecent, pruneRecent } from "./window-id.js";
 import { fetchJsonWithTimeout } from "./fetch-timeout.js";
 import { filterWindowTree, flattenWindowTree, splitRedundantPrefix } from "./window-filter.js";
-import { ATTENTION_RANK as ATTN_RANK, attentionReason, disconnectPresentation } from "./window-attention.js";
+import { ATTENTION_RANK as ATTN_RANK, attentionReason, disconnectPresentation, attentionUnknown } from "./window-attention.js";
 
 const SNAPSHOT_BOTTOM_SLOP_PX = 8;
 const MAX_WAVEFORM_SAMPLES = 40;
@@ -869,6 +869,45 @@ function captureFeedbackContext(note) {
         typeof window !== "undefined"
           ? `${window.innerWidth}x${window.innerHeight}`
           : "",
+    },
+    // State of the controls users actually report as "not working". A report
+    // saying "the keys don't respond" was previously unanswerable: the payload
+    // showed no /api/key call and no client events, with no way to tell whether
+    // the buttons were disabled, the menu was closed, or the taps never landed.
+    controls: {
+      // Are the key buttons currently disabled (offline/disconnect treatment)?
+      directKeysDisabled: [...document.querySelectorAll("[data-key]")].filter(
+        (b) => b.disabled,
+      ).length,
+      directKeysTotal: document.querySelectorAll("[data-key]").length,
+      // Were the popup menus open? Both features live behind a toggle, so a
+      // closed menu means the user never reached the control they're reporting.
+      directKeysMenuOpen: els.directKeysMenu ? !els.directKeysMenu.hidden : null,
+      moreMenuOpen: els.moreActionsMenu ? !els.moreActionsMenu.hidden : null,
+      // The keys menu is a scrollable popup on narrow screens; if it overflows,
+      // the lower keys (Up/Down) can be out of view entirely.
+      directKeysMenuScroll: els.directKeysMenu
+        ? {
+            scrollTop: els.directKeysMenu.scrollTop,
+            clientHeight: els.directKeysMenu.clientHeight,
+            scrollHeight: els.directKeysMenu.scrollHeight,
+            overflows: els.directKeysMenu.scrollHeight > els.directKeysMenu.clientHeight,
+          }
+        : null,
+      answerAffordance: els.moreActionsToggle
+        ? {
+            pending: els.moreActionsToggle.classList.contains("has-question"),
+            unknown: els.moreActionsToggle.classList.contains("question-unknown"),
+          }
+        : null,
+    },
+    // Freshness of the data that arms the "question waiting" signal. A stale
+    // attention array makes a blocked window look calm.
+    attention: {
+      count: state.attention.length,
+      lastOkMsAgo: attentionLastOkMs ? Date.now() - attentionLastOkMs : null,
+      failingForMs: attentionFailingSince ? Date.now() - attentionFailingSince : 0,
+      stale: attentionIsStale(),
     },
     // Recent activity leading up to the report — usually the smoking gun.
     recentApiCalls: recentApiCalls.slice(),
@@ -4267,15 +4306,26 @@ function updateAttentionIndicators() {
 // visible) plus a highlight on the "Answer question" item inside the menu.
 function updateAnswerAffordance() {
   const pending = activeWindowHasQuestion();
+  // When /api/attention is failing, `pending` is computed from stale data and a
+  // dark dot means "we don't know", not "nothing is waiting". Say so instead of
+  // projecting false calm — "Answer question" still works (it does its own
+  // pane read), so the user needs to know it's worth tapping.
+  const stale = !pending && attentionIsStale();
   if (els.moreActionsToggle) {
     els.moreActionsToggle.classList.toggle("has-question", pending);
+    els.moreActionsToggle.classList.toggle("question-unknown", stale);
     els.moreActionsToggle.setAttribute(
       "aria-label",
-      pending ? "More actions — a question is waiting" : "More actions",
+      pending
+        ? "More actions — a question is waiting"
+        : stale
+          ? "More actions — question status unknown (attention check is failing)"
+          : "More actions",
     );
   }
   if (els.answerQuestion) {
     els.answerQuestion.classList.toggle("has-question", pending);
+    els.answerQuestion.classList.toggle("question-unknown", stale);
   }
 }
 
@@ -4465,12 +4515,40 @@ async function loadAttentionOnce() {
       }
     }
     state.attention = descriptors;
+    attentionLastOkMs = Date.now();
+    if (attentionFailingSince) {
+      logClientEvent("attention_recovered", {
+        outageMs: Date.now() - attentionFailingSince,
+      });
+      attentionFailingSince = 0;
+    }
     const activeWin = selectedWindow();
     if (activeWin) markWindowVisited(activeWin);
     updateAttentionIndicators();
-  } catch {
-    // transient failure — keep the last known attention
+  } catch (error) {
+    // Transient failure — KEEP the last known attention (clearing it would make
+    // every window look calm). But do not stay silent about it: this array is
+    // what arms the "a question is waiting" dot, so while it is stale the
+    // affordance can sit dark on a window that IS blocked. /api/attention brokers
+    // capturePane across every window on every machine and routinely takes ~5s,
+    // so a timeout here is normal-ish and users hit it (observed: a 21s timeout
+    // while the user was trying to answer a question).
+    if (!attentionFailingSince) attentionFailingSince = Date.now();
+    logClientEvent("attention_failed", {
+      message: String(error?.message || error).slice(0, 200),
+      staleMs: attentionLastOkMs ? Date.now() - attentionLastOkMs : null,
+    });
+    updateAttentionIndicators(); // reflect staleness in the UI
   }
+}
+
+let attentionLastOkMs = 0;
+let attentionFailingSince = 0;
+
+// Is our attention data too old to trust? Shared with the tests via
+// window-attention.js so the threshold and the edge cases have one definition.
+function attentionIsStale() {
+  return attentionUnknown({ lastOkMs: attentionLastOkMs });
 }
 
 // In-flight guard, same shape as loadWindowMetadata(). /api/attention is the
@@ -4840,9 +4918,11 @@ async function closeCurrentWindow() {
 // Claude AskUserQuestion, then render it. Nothing is scanned until this runs.
 async function openAskOverlay() {
   if (!state.paneId) {
+    logClientEvent("ask_open_skipped", { reason: "no_pane" });
     setStatus("Select a window first", false);
     return;
   }
+  logClientEvent("ask_open", { attentionStale: attentionIsStale() });
   els.askSheet.hidden = false;
   els.askTabs.innerHTML = "";
   els.askBody.innerHTML = '<div class="ask-loading">Scanning for a question…</div>';
@@ -4852,6 +4932,9 @@ async function openAskOverlay() {
     const data = await api(`/api/ask-question?paneId=${encodeURIComponent(state.paneId)}`);
     renderAsk(data.question);
   } catch (error) {
+    logClientEvent("ask_failed", {
+      message: String(error?.message || error).slice(0, 200),
+    });
     askError(error.message || "Could not read the pane");
   }
 }
@@ -5297,9 +5380,12 @@ async function sendMessage(text, enter, { submitNudge = false } = {}) {
 
 async function sendKey(key) {
   if (!state.paneId) {
+    // Silent-looking failure from the user's side: the button "does nothing".
+    logClientEvent("key_send_skipped", { key, reason: "no_pane" });
     addChat("system", "Select a window first.", "system");
     return;
   }
+  logClientEvent("key_send", { key });
   addChat("user", `[${key}]`, "key");
   await api("/api/key", {
     method: "POST",
@@ -6787,11 +6873,33 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// Terminal-key buttons (Up/Down/Enter/Esc/^C/…). Instrumented like Send above,
+// and for the same reason: a user reported "up down enter doesn't respond" and
+// the feedback report contained NO /api/key call and NO client events at all,
+// so there was no way to tell where the tap died. The ladder:
+//   key_pointerup but no key_click -> the tap is swallowed between pointerup and
+//     click (an iOS WebKit hazard, and these live in a scrollable popup menu
+//     where a touch that moves is treated as a scroll, not a tap);
+//   key_click but no key_send      -> the click landed on a DISABLED button;
+//   key_send but no /api/key       -> dispatch or the paneId guard;
+//   all three and still nothing    -> downstream (broker/agent).
 for (const button of document.querySelectorAll("[data-key]")) {
+  button.addEventListener("pointerup", () => {
+    logClientEvent("key_pointerup", { key: button.dataset.key });
+  });
   button.addEventListener("click", async () => {
+    logClientEvent("key_click", {
+      key: button.dataset.key,
+      disabled: Boolean(button.disabled),
+      hasPane: Boolean(state.paneId),
+    });
     try {
       await sendKey(button.dataset.key);
     } catch (error) {
+      logClientEvent("key_failed", {
+        key: button.dataset.key,
+        message: String(error?.message || error).slice(0, 200),
+      });
       addChat("system", error.message, "error");
     }
   });

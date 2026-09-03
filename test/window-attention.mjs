@@ -110,3 +110,35 @@ assert.equal(isSnapshotPlaceholderText("$ real output"), false);
 assert.equal(isSnapshotPlaceholderText(""), false);
 
 console.log("window-attention: disconnect presentation ok");
+
+// --- attention freshness -----------------------------------------------------
+// Regression: /api/attention failures were swallowed, so a stale array left the
+// "question waiting" dot dark — reading as "nothing is waiting" when the truth
+// was "we don't know". A user hit this during a 21s timeout.
+
+const { attentionUnknown, ATTENTION_STALE_MS } = await import("../public/window-attention.js");
+
+const T = 1_000_000;
+// THE REGRESSION: data older than the threshold must be reported as unknown.
+assert.equal(
+  attentionUnknown({ lastOkMs: T - (ATTENTION_STALE_MS + 1), now: T }),
+  true,
+  "stale attention must read as unknown, not as 'nothing waiting'",
+);
+// Fresh data is trusted.
+assert.equal(attentionUnknown({ lastOkMs: T - 1000, now: T }), false);
+// Exactly at the threshold is not yet stale (strict >).
+assert.equal(attentionUnknown({ lastOkMs: T - ATTENTION_STALE_MS, now: T }), false);
+// A confident pending question needs no hedge, however old the poll is.
+assert.equal(
+  attentionUnknown({ lastOkMs: T - 999_999, now: T, pending: true }),
+  false,
+  "a known pending question must never be downgraded to 'unknown'",
+);
+// Never loaded is absent, not stale — a fresh page must not show uncertainty.
+assert.equal(attentionUnknown({ lastOkMs: 0, now: T }), false);
+assert.equal(attentionUnknown(), false);
+// The real reported outage: 21s timeout exceeds the 20s threshold.
+assert.equal(attentionUnknown({ lastOkMs: T - 21_000, now: T }), true);
+
+console.log("window-attention: attention freshness ok");
