@@ -3,6 +3,8 @@ import {
   createTmuxWindowRuntime,
   createWindowRuntime,
   defaultDuplicateCommand,
+  tmuxFormats,
+  windowFromTmuxRow,
 } from "../lib/window-runtime.mjs";
 
 const calls = [];
@@ -14,8 +16,8 @@ const backend = {
     const [cmd] = args;
     if (cmd === "list-windows" && args.includes("-a")) {
       return [
-        "$1\twork\t2\t0\tcreated\t@1\t0\tcodex\t1\t1\t*\tcodex\t/dev/ttys001\t/repo\tnote one",
-        "$1\twork\t2\t0\tcreated\t@2\t1\tshell\t0\t1\t-\tzsh\t/dev/ttys002\t/tmp\t",
+        "$1\twork\t2\t0\tcreated\t@1\t0\tcodex\t1\t1\t*\tcodex\t/dev/ttys001\t/repo\t1\tnote one",
+        "$1\twork\t2\t0\tcreated\t@2\t1\tshell\t0\t1\t-\tzsh\t/dev/ttys002\t/tmp\t\t",
       ].join("\n");
     }
     if (cmd === "list-panes" && args.includes("-a")) {
@@ -76,6 +78,8 @@ assert.equal(tree.windows.length, 2);
 assert.equal(tree.windows[0].id, "@1");
 assert.equal(tree.windows[0].sessionId, "$1");
 assert.equal(tree.windows[0].annotation, "note one");
+// @tm_pinned rides in front of the free-text annotation (which must stay last).
+assert.equal(tree.windows[0].pinned, true);
 
 const surfaces = await runtime.listWindowSurfaces({ windowId: "@1" });
 assert.equal(surfaces.length, 1);
@@ -202,3 +206,42 @@ assert.equal(
 assert.equal(defaultDuplicateCommand(""), "", "empty stays empty");
 
 console.log("window-runtime unit tests passed");
+
+// --- pinned windows (@tm_pinned) --------------------------------------------
+// The pin is a property of the WINDOW, stored as a tmux user option like the
+// @tm_annotation note, so it survives a different browser/device/redeploy —
+// localStorage did not (reported 2026-09-03).
+{
+  // Parsed off the row: "1" -> true, empty/absent -> false.
+  const pinnedRow = "@1\t0\tcodex\t1\t1\t*\tcodex\t/dev/ttys001\t/repo\t1\tnote one".split("\t");
+  const plainRow = "@2\t1\tshell\t0\t1\t-\tzsh\t/dev/ttys002\t/tmp\t\t".split("\t");
+  assert.equal(windowFromTmuxRow(pinnedRow).pinned, true);
+  assert.equal(windowFromTmuxRow(plainRow).pinned, false);
+
+  // The free-text annotation MUST stay the last field: it may contain tabs, and
+  // the parser takes everything from its index onward. A new field placed after
+  // it would silently truncate notes.
+  assert.ok(
+    tmuxFormats.windows.endsWith("#{@tm_annotation}"),
+    "@tm_annotation must remain the final format field",
+  );
+  const tabbed = "@3\t0\tn\t0\t1\t-\tsh\t/dev/t\t/x\t1\tpart a\tpart b".split("\t");
+  assert.equal(windowFromTmuxRow(tabbed).annotation, "part a\tpart b", "tabs in a note survive");
+  assert.equal(windowFromTmuxRow(tabbed).pinned, true, "pin is read from before the note");
+
+  // Setting/clearing drives the right tmux command: set "1", UNSET when clearing
+  // (so an unpinned window carries no leftover option).
+  const pinCalls = [];
+  const pinRuntime = createTmuxWindowRuntime({
+    async tmux(args) {
+      pinCalls.push(args);
+      return "";
+    },
+  });
+  await pinRuntime.setWindowPinned({ windowId: "@7", pinned: true });
+  await pinRuntime.setWindowPinned({ windowId: "@7", pinned: false });
+  assert.deepEqual(pinCalls[0], ["set-option", "-w", "-t", "@7", "@tm_pinned", "1"]);
+  assert.deepEqual(pinCalls[1], ["set-option", "-w", "-t", "@7", "-u", "@tm_pinned"]);
+}
+
+console.log("window-runtime: pinned option ok");
