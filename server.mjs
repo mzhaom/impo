@@ -2069,7 +2069,58 @@ async function getWindowView(windowId, lines) {
 const paneActivitySamples = new Map();
 const PANE_ACTIVITY_SAMPLE_CHARS = 100;
 
+// Short-TTL memoization + in-flight coalescing for the per-session activity
+// sweep, which was by far the hottest endpoint on the hosted controller:
+// /api/window-activity was 88% of sampled requests, and 92 of 120 sampled calls
+// were already being shed with 429 (p90 6.9s against a 3s client poll, so ticks
+// overlapped). Each call brokers listWindows + listPanes + capturePane per
+// window to the agent — ~58 round trips for a 28-window/2-session box, per tab.
+//
+// Caching the in-flight PROMISE is what actually collapses the load: every tab
+// polling the same session within the TTL rides one sweep instead of starting
+// its own.
+//
+// This is ALSO a correctness fix, not just a cost one. The result is a DIFF
+// against paneActivitySamples ("did this pane change since the last call"), so
+// concurrent uncoalesced callers used to steal each other's baseline: the
+// second caller compared against a sample taken milliseconds earlier and saw
+// no change, reporting a busy pane as idle. Activity dots got LESS reliable as
+// more tabs opened. Keep the TTL well under the client poll cadence so the
+// sampling interval stays ~one poll apart and real changes are still seen.
+const SESSION_ACTIVITY_TTL_MS = parsePositiveInteger(
+  process.env.TMUX_MOBILE_SESSION_ACTIVITY_TTL_MS,
+  2000,
+);
+const sessionActivityCache = new Map(); // `${backend+mux}\0${sessionId}` -> { at, promise }
+
 async function getSessionWindowActivity(sessionId) {
+  const now = Date.now();
+  // Scoped per backend+mux like the metadata cache: identical session ids on
+  // different machines must never serve each other's activity.
+  const cacheKey = `${currentMetadataScope()}\0${sessionId}`;
+  const cached = sessionActivityCache.get(cacheKey);
+  if (cached && now - cached.at < SESSION_ACTIVITY_TTL_MS) {
+    return cached.promise;
+  }
+  const promise = computeSessionWindowActivity(sessionId);
+  sessionActivityCache.set(cacheKey, { at: now, promise });
+  // On failure, drop the entry so the next caller retries instead of being
+  // pinned to a rejected promise for the TTL window.
+  promise.catch(() => {
+    if (sessionActivityCache.get(cacheKey)?.promise === promise) {
+      sessionActivityCache.delete(cacheKey);
+    }
+  });
+  // Opportunistic prune so the map can't grow unbounded across closed sessions.
+  if (sessionActivityCache.size > 256) {
+    for (const [key, entry] of sessionActivityCache) {
+      if (now - entry.at >= SESSION_ACTIVITY_TTL_MS) sessionActivityCache.delete(key);
+    }
+  }
+  return promise;
+}
+
+async function computeSessionWindowActivity(sessionId) {
   const windows = await listWindows(sessionId);
   const result = {};
   for (const win of windows) {

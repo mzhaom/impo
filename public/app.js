@@ -4699,6 +4699,21 @@ async function pollWindowActivity() {
   }
 }
 
+// Activity poll cadence. This poll is the single most expensive thing the
+// client does to the controller: each tick fans out one request PER tmux
+// session, and each of those brokers listPanes + capturePane for every window
+// in the session to the agent. Measured on the hosted controller it was 88% of
+// all requests and was being rate-limited (429) most of the time.
+//
+// A hidden tab cannot show an activity dot to anyone, so polling it at the
+// visible cadence is pure load. Same shape as metadataPollInterval().
+const ACTIVITY_POLL_VISIBLE_MS = 3000;
+const ACTIVITY_POLL_HIDDEN_MS = 15000;
+
+function activityPollInterval() {
+  return document.hidden ? ACTIVITY_POLL_HIDDEN_MS : ACTIVITY_POLL_VISIBLE_MS;
+}
+
 function startActivityPolling() {
   stopActivityPolling();
   if (state.sessions.length === 0) return;
@@ -4710,7 +4725,7 @@ function startActivityPolling() {
   const tick = async () => {
     await pollWindowActivity();
     if (state.activityTimer !== null) {
-      state.activityTimer = window.setTimeout(tick, 3000);
+      state.activityTimer = window.setTimeout(tick, activityPollInterval());
     }
   };
   state.activityTimer = 0; // non-null sentinel so the first tick's re-arm runs
@@ -4772,6 +4787,10 @@ function stopMetadataPolling() {
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && state.sessions.length > 0) {
     startMetadataPolling();
+    // Restart the activity poll as well: while hidden it re-armed at the slow
+    // cadence, so without this the user stares at stale activity dots for up
+    // to ACTIVITY_POLL_HIDDEN_MS after coming back.
+    startActivityPolling();
   }
 });
 
