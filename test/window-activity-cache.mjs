@@ -146,6 +146,12 @@ assert.match(serverSrc, /const sessionActivityCache = new Map\(\)/,
   "server.mjs lost the window-activity cache");
 assert.match(serverSrc, /SESSION_ACTIVITY_TTL_MS = parsePositiveInteger\(/,
   "server.mjs lost the configurable activity TTL");
+// The TTL must stay ABOVE observed sweep latency (~3.7s for 27 windows) or a
+// steady poller never gets a cache hit and the endpoint chains full sweeps.
+{
+  const ttl = Number(serverSrc.match(/SESSION_ACTIVITY_TTL_MS = parsePositiveInteger\(\s*process\.env\.TMUX_MOBILE_SESSION_ACTIVITY_TTL_MS,\s*(\d+)/)[1]);
+  assert.ok(ttl >= 4000, `activity TTL ${ttl}ms is below measured sweep latency; sequential polls would never hit the cache`);
+}
 assert.match(serverSrc, /async function computeSessionWindowActivity\(/,
   "server.mjs lost the uncached activity computation");
 // The cached wrapper, not the raw compute, must be what the endpoint calls.
