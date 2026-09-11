@@ -2087,9 +2087,17 @@ const PANE_ACTIVITY_SAMPLE_CHARS = 100;
 // no change, reporting a busy pane as idle. Activity dots got LESS reliable as
 // more tabs opened. Keep the TTL well under the client poll cadence so the
 // sampling interval stays ~one poll apart and real changes are still seen.
+// 5s, chosen by measurement rather than taste: a 27-window sweep takes ~3.7s
+// against a real agent, so a TTL BELOW that never produces a cache hit for a
+// steady poller — each tick starts after the previous entry already expired,
+// and the endpoint chains full sweeps forever (measured: 3.79s, 3.67s, 3.71s
+// for three sequential ticks at TTL=2000). At 5s the same sequence measured
+// 3.34s then 0.089s / 0.095s / 0.105s — a ~37x drop with zero agent round
+// trips on the hits. Keep it comfortably above sweep latency; the pane-diff
+// semantics still hold (a busy pane is detected on the next uncached tick).
 const SESSION_ACTIVITY_TTL_MS = parsePositiveInteger(
   process.env.TMUX_MOBILE_SESSION_ACTIVITY_TTL_MS,
-  2000,
+  5000,
 );
 const sessionActivityCache = new Map(); // `${backend+mux}\0${sessionId}` -> { at, promise }
 
