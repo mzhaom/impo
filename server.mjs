@@ -285,6 +285,10 @@ const EXTERNAL_EXTS = new Map([
   [".flac", "audio/flac"],
   [".html", "text/html; charset=utf-8"],
   [".htm", "text/html; charset=utf-8"],
+  // PDF — the browser's built-in viewer renders it in the tab. Like HTML it is
+  // ACTIVE content (embedded JS runs in the built-in viewers), so it is served
+  // sandboxed; see isActiveContentType().
+  [".pdf", "application/pdf"],
 ]);
 function fileExt(filePath) {
   return path.extname(String(filePath)).toLowerCase();
@@ -315,17 +319,29 @@ function isHtmlContentType(contentType) {
   return /^text\/html\b/i.test(String(contentType || ""));
 }
 
+// Is this content the browser will EXECUTE when it renders it top-level? HTML is
+// the obvious case; PDF is the non-obvious one — Chrome's and Firefox's built-in
+// viewers run JavaScript embedded in a PDF (/OpenAction, /AA, XFA), so a hostile
+// agent-authored PDF served unsandboxed from this cookie-bearing origin could
+// reach this origin's storage and APIs exactly like a hostile HTML page.
+// Everything else here (images, audio, video, text) is inert decoded data.
+function isActiveContentType(contentType) {
+  const text = String(contentType || "");
+  return isHtmlContentType(text) || /^application\/pdf\b/i.test(text);
+}
+
 // Security headers for serving a RAW artifact's bytes. Artifacts are arbitrary,
 // possibly-hostile, agent-authored content served from this (cookie-bearing)
-// origin. For HTML we add `Content-Security-Policy: sandbox` so the document —
-// even when opened as a top-level tab ("Open raw") — runs in a unique OPAQUE
-// origin: scripts may run (allow-scripts) but the document cannot read this
-// origin's cookies/storage or call its APIs. `nosniff` stops a non-HTML type
-// from being reinterpreted as HTML. `download` forces the attachment path, which
-// never executes, so no sandbox is needed there.
+// origin. For ACTIVE content — HTML and PDF, see isActiveContentType() — we add
+// `Content-Security-Policy: sandbox` so the document — even when opened as a
+// top-level tab ("Open raw") — runs in a unique OPAQUE origin: scripts may run
+// (allow-scripts) but the document cannot read this origin's cookies/storage or
+// call its APIs. `nosniff` stops a non-HTML type from being reinterpreted as
+// HTML. `download` forces the attachment path, which never executes, so no
+// sandbox is needed there.
 function rawArtifactSecurityHeaders(contentType, { download = false } = {}) {
   const headers = { "x-content-type-options": "nosniff" };
-  if (!download && isHtmlContentType(contentType)) {
+  if (!download && isActiveContentType(contentType)) {
     // allow-scripts so self-contained pages work; NO allow-same-origin, so the
     // sandboxed document can't reach the app origin.
     headers["content-security-policy"] = "sandbox allow-scripts allow-popups allow-forms";

@@ -28,10 +28,11 @@ export const URL_IN_ESCAPED = /(\bhttps?:\/\/|\bwww\.)[^\s<>"']+/gi;
 
 // File extensions the smart content viewer can render. Keep in sync with the
 // server's fileKind()/IMAGE_EXTS/MARKDOWN_EXTS/EXTERNAL_EXTS. Images + markdown
-// open in the in-app viewer; video/audio/html open in an external tab (the
-// browser plays audio with native <audio> controls).
+// open in the in-app viewer; video/audio/html/pdf open in an external tab (the
+// browser plays audio with native <audio> controls and renders PDF with its
+// built-in viewer).
 const VIEWABLE_FILE_EXTS =
-  "png|jpe?g|gif|svg|webp|bmp|ico|md|markdown|mdown|mkd|webm|mp4|m4v|mov|wav|mp3|ogg|m4a|aac|flac|html?";
+  "png|jpe?g|gif|svg|webp|bmp|ico|md|markdown|mdown|mkd|webm|mp4|m4v|mov|wav|mp3|ogg|m4a|aac|flac|html?|pdf";
 const VIEWABLE_FILE_EXT_RE = new RegExp(String.raw`\.(?:${VIEWABLE_FILE_EXTS})$`, "i");
 
 // Matches file paths ending in a viewable extension, in already-escaped text.
