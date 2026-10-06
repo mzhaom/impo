@@ -102,7 +102,74 @@ assert.doesNotMatch(
   "the sandbox gate must no longer be HTML-only",
 );
 
-// --- 5. client and server lists must agree on pdf ---------------------------
+// --- 5. the PIN path has its OWN sandbox decision — it must cover PDF too ----
+// lib/pins.mjs serves pinned artifacts and computed its sandbox from its own
+// `isHtml`, independent of server.mjs. Fixing only server.mjs would still have
+// served a pinned PDF UNSANDBOXED on the shared-link path, which is the path
+// that matters most (links are handed to other people). This drives the REAL
+// servePin().
+{
+  const { createPin, servePin, setPinIndex, hydratePins } = await import("../lib/pins.mjs");
+  const { createMemoryPinIndex } = await import("../lib/pin-index.mjs");
+  setPinIndex(createMemoryPinIndex());
+  await hydratePins();
+
+  const objects = new Map();
+  const storage = {
+    kind: "local",
+    servesDirectly: () => false,
+    async put(k, b) { objects.set(k, Buffer.from(b)); return { key: k, size: b.length }; },
+    async get(k) { const b = objects.get(k); return b ? { bytes: b, size: b.length } : null; },
+    async delete(k) { objects.delete(k); },
+    async url() { return ""; },
+  };
+  const alice = { userId: "a@x.com", email: "a@x.com", hd: "x.com" };
+  let clock = 1;
+  const now = () => clock++;
+  const pdf = Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n");
+
+  const { pin } = await createPin({
+    viewer: alice, bytes: pdf, name: "report.pdf", ext: ".pdf",
+    kind: "external", contentType: "application/pdf",
+    sourcePath: "/p/report.pdf", sourceMachineId: "m1", share: { scope: "private" },
+  }, { storage, now });
+
+  const raw = await servePin(alice, pin.token, { storage, raw: true });
+  assert.equal(raw.status, 200);
+  assert.equal(raw.headers["content-type"], "application/pdf");
+  assert.equal(raw.body.slice(0, 5).toString(), "%PDF-", "must serve the real PDF bytes");
+  assert.match(
+    raw.headers["content-security-policy"] || "",
+    /^sandbox /,
+    "THE REGRESSION: a pinned PDF must be sandboxed on the shared-link path",
+  );
+  assert.equal(raw.headers["x-content-type-options"], "nosniff");
+
+  // Downloaded as an attachment: never executes, so no sandbox.
+  const dl = await servePin(alice, pin.token, { storage, raw: true, dl: true });
+  assert.match(dl.headers["content-disposition"], /^attachment;/);
+  assert.equal(dl.headers["content-security-policy"], undefined);
+
+  // An inert pinned type must still NOT be sandboxed.
+  const { pin: img } = await createPin({
+    viewer: alice, bytes: Buffer.from("\x89PNG\r\n"), name: "p.png", ext: ".png",
+    kind: "image", contentType: "image/png",
+    sourcePath: "/p/p.png", sourceMachineId: "m1", share: { scope: "private" },
+  }, { storage, now });
+  const rawImg = await servePin(alice, img.token, { storage, raw: true });
+  assert.equal(rawImg.headers["content-security-policy"], undefined,
+    "an inert image pin must not be sandboxed");
+}
+
+// The pin module must wire the active-content check, not an HTML-only one.
+const pinsSrc = fs.readFileSync(path.join(root, "lib", "pins.mjs"), "utf8");
+assert.match(pinsSrc, /application\\?\/pdf/, "lib/pins.mjs must test for application/pdf");
+assert.match(pinsSrc, /if \(isActive && !dl\)/,
+  "lib/pins.mjs must gate its sandbox on isActive, not isHtml");
+assert.doesNotMatch(pinsSrc, /if \(isHtml && !dl\)/,
+  "lib/pins.mjs sandbox gate must no longer be HTML-only");
+
+// --- 6. client and server lists must agree on pdf ---------------------------
 const linkifySrc = fs.readFileSync(path.join(root, "public", "linkify.js"), "utf8");
 assert.match(linkifySrc, /VIEWABLE_FILE_EXTS\s*=\s*\n?\s*"[^"]*\bpdf\b/,
   "public/linkify.js must list pdf as viewable (kept in sync with the server)");
